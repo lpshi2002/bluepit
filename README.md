@@ -6,7 +6,7 @@
 
 ## 설치와 실행
 
-Pleos Connect v2.1 에뮬레이터(Android 14)를 부팅한다. 설치 파일은 [심사용 release APK](apk/pitstop_피트스톱_release.apk)다. 저장소 루트에서 실행한다.
+시험 환경은 Pleos Connect v2.1 에뮬레이터, Android 14, 가로 2560 × 세로 1440 px이다. 에뮬레이터를 부팅한다. 설치 파일은 [심사용 release APK](apk/pitstop_피트스톱_release.apk)다. 저장소 루트에서 실행한다.
 
 ```sh
 adb install -r apk/pitstop_피트스톱_release.apk

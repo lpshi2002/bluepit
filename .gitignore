@@ -1,0 +1,12 @@
+logs/
+**/build/
+**/.gradle/
+local.properties
+.DS_Store
+*.keystore
+*.jks
+**/.kotlin/
+.idea/
+.env
+.env.*
+*.pem

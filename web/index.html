@@ -1,0 +1,975 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>피트스톱 시뮬레이터</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500&display=swap">
+<style>
+/* 레이아웃: 차량 중앙 화면을 옮긴 2단(제안·대화·주행 패턴 | 소모품·설정·시연 조작). 좁으면 1단으로 쌓는다.
+   안드로이드 앱(Material 3 다크)과 같은 화면을 보여 주려고 다크 한 가지 테마로 고정한다. */
+:root {
+  color-scheme: dark;
+  --bg: #141218;
+  --surface: #211f26;
+  --surface-strong: #36343b;
+  --fg: #e6e0e9;
+  --fg-muted: #cac4d0;
+  --outline: #938f99;
+  --primary: #d0bcff;
+  --on-primary: #381e72;
+  --severe: #efb8c8;
+  --notice: #d0bcff;
+  --banner: #2b2930;
+  --font-body: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
+  --font-num: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.45;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-top: max(16px, env(safe-area-inset-top, 0px));
+  padding-bottom: max(32px, env(safe-area-inset-bottom, 0px));
+  box-sizing: border-box;
+}
+* { box-sizing: border-box; }
+button, input { font: inherit; color: inherit; }
+:focus-visible { outline: 3px solid var(--primary); outline-offset: 2px; }
+[hidden] { display: none !important; }
+
+.banner {
+  display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: baseline;
+  background: var(--banner); border-radius: 12px; padding: 10px 16px;
+  color: var(--fg-muted); font-size: 0.875rem; margin-bottom: 20px;
+}
+.banner strong { color: var(--fg); font-weight: 600; letter-spacing: 0.02em; }
+
+.screen { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 24px; align-items: start; }
+@media (max-width: 900px) { .screen { grid-template-columns: minmax(0, 1fr); } }
+.col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.col.right { gap: 12px; }
+
+.top { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 8px 16px; }
+h1 { font-size: clamp(1.4rem, 2.4vw, 1.75rem); font-weight: 700; margin: 0; text-wrap: balance; }
+.meta { margin: 2px 0 0; color: var(--fg); font-size: 0.95rem; }
+.num { font-family: var(--font-num); font-variant-numeric: tabular-nums; font-size: 0.95em; }
+
+.agent { background: var(--surface-strong); border-radius: 14px; padding: clamp(18px, 2.4vw, 28px); display: flex; flex-direction: column; gap: 12px; }
+.agent .kicker { font-size: 0.9rem; font-weight: 600; color: var(--primary); margin: 0; letter-spacing: 0.02em; }
+.agent .title { font-size: clamp(1.35rem, 2.6vw, 2rem); font-weight: 700; margin: 0; text-wrap: balance; }
+.agent .body { font-size: clamp(1rem, 1.6vw, 1.3rem); margin: 0; }
+.agent .reason { font-size: clamp(0.95rem, 1.4vw, 1.15rem); margin: 0; color: var(--fg-muted); }
+.agent .reason.severe { color: var(--severe); }
+.agent .question { font-size: clamp(1.1rem, 1.9vw, 1.55rem); font-weight: 600; margin: 0; text-wrap: pretty; }
+.agent .detail { font-size: 0.95rem; margin: 0; color: var(--fg-muted); }
+.notice { color: var(--notice); font-size: 1.1rem; margin: 0; }
+
+.buttons { display: flex; flex-wrap: wrap; gap: 12px; }
+.btn {
+  min-height: 56px; padding: 0 24px; border-radius: 999px; cursor: pointer;
+  font-size: 1.1rem; font-weight: 500; border: 1px solid var(--outline); background: transparent; color: var(--primary);
+}
+.btn.primary { background: var(--primary); color: var(--on-primary); border-color: var(--primary); }
+.btn.small { min-height: 44px; padding: 0 18px; font-size: 1rem; }
+.btn[aria-pressed="true"] { background: var(--surface); border-color: var(--primary); }
+.btn:hover { filter: brightness(1.12); }
+.btn.wide { align-self: flex-start; }
+
+.say { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.say input {
+  flex: 1 1 220px; min-height: 48px; border-radius: 12px; border: 1px solid var(--outline);
+  background: var(--surface); padding: 0 14px; font-size: 1.05rem;
+}
+.say-hint { margin: 0; font-size: 0.85rem; color: var(--fg-muted); }
+
+.card { background: var(--surface); border-radius: 12px; padding: 14px 16px; }
+.drive h2, .section-title { font-size: 1.25rem; font-weight: 700; margin: 0; }
+.drive { display: flex; flex-direction: column; gap: 8px; padding: 20px; }
+.drive p { margin: 0; }
+.severe-text { color: var(--severe); }
+.muted { color: var(--fg-muted); font-size: 0.9rem; }
+.scores { display: flex; flex-direction: column; gap: 10px; margin: 4px 0; padding: 0; list-style: none; }
+.scores li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; }
+.scores .label { font-weight: 600; }
+.scores .value { font-family: var(--font-num); text-align: right; }
+.scores .value.on { color: var(--severe); }
+.scores .src { grid-column: 1 / -1; font-size: 0.85rem; color: var(--fg-muted); }
+
+.item { display: flex; flex-direction: column; gap: 2px; }
+.item .name { font-size: 1.1rem; font-weight: 600; }
+.item .status { font-size: 0.98rem; }
+.item .basis { font-size: 0.85rem; color: var(--fg-muted); }
+.item .basis.severe { color: var(--severe); }
+
+.guide { color: var(--fg-muted); font-size: 0.9rem; margin: 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: 4px; }
+
+/* 설정 대화상자 */
+.scrim { position: fixed; inset: 0; background: rgb(0 0 0 / 0.55); display: grid; place-items: center; padding: 16px; z-index: 20; }
+.dialog {
+  background: var(--surface-strong); border-radius: 24px; width: min(640px, 100%); max-height: 88vh;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.dialog header { padding: 22px 24px 8px; font-size: 1.5rem; font-weight: 600; }
+.dialog .content { overflow-y: auto; padding: 0 24px 12px; display: flex; flex-direction: column; gap: 6px; }
+.dialog footer { display: flex; justify-content: flex-end; padding: 8px 16px 16px; }
+.dialog h3 { font-size: 1.1rem; margin: 12px 0 4px; }
+.radio { display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 4px 6px; border-radius: 10px; cursor: pointer; background: none; border: 0; text-align: left; width: 100%; }
+.radio:hover { background: var(--surface); }
+.dot { width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--outline); flex: none; display: grid; place-items: center; }
+.radio[aria-checked="true"] .dot { border-color: var(--primary); }
+.radio[aria-checked="true"] .dot::after { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--primary); }
+.mismatch { color: var(--fg-muted); font-size: 0.9em; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { min-height: 36px; padding: 4px 14px; border-radius: 8px; border: 1px solid var(--outline); background: transparent; cursor: pointer; font-size: 0.95rem; }
+.chip[aria-pressed="true"] { background: var(--surface); border-color: var(--primary); color: var(--primary); }
+.text-btn { background: none; border: 0; color: var(--primary); font-size: 1.1rem; padding: 10px 16px; cursor: pointer; border-radius: 999px; }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+
+<div class="banner" role="note">
+  <strong>웹 시뮬레이터</strong>
+  <span>Pleos Connect 앱 "피트스톱"의 기획서 기준 판단 규칙으로 동작합니다. 차량·내비게이션 대신 가상 데이터를 씁니다. 정비소는 샘플이고, "제휴 가정" 정비소의 빈 시간과 퇴근길 연장 시간은 블루핸즈 제휴를 가정한 시연 값입니다. 예약과 알림은 실제로 보내지 않습니다.</span>
+</div>
+<main id="app" aria-live="polite"></main>
+
+<script>
+"use strict";
+
+/* ---------- 날짜: 1970-01-01부터 센 날 수(epoch day)로 다룬다 ---------- */
+const DAY_MS = 86400000;
+const fromYMD = (y, m, d) => Math.floor(Date.UTC(y, m - 1, d) / DAY_MS);
+const ymd = (e) => { const t = new Date(e * DAY_MS); return { y: t.getUTCFullYear(), m: t.getUTCMonth() + 1, d: t.getUTCDate() }; };
+const dow = (e) => new Date(e * DAY_MS).getUTCDay(); // 0=일 … 6=토
+const realToday = () => { const n = new Date(); return fromYMD(n.getFullYear(), n.getMonth() + 1, n.getDate()); };
+/** Java LocalDate.plusMonths처럼 말일을 넘지 않게 맞춘다. */
+function plusMonths(e, n) {
+  const { y, m, d } = ymd(e);
+  const total = (m - 1) + n;
+  const ny = y + Math.floor(total / 12);
+  const nm = ((total % 12) + 12) % 12 + 1;
+  const last = new Date(Date.UTC(ny, nm, 0)).getUTCDate();
+  return fromYMD(ny, nm, Math.min(d, last));
+}
+const DOW_KO = ["일", "월", "화", "수", "목", "금", "토"];
+function korean(e) {
+  const { y, m, d } = ymd(e);
+  const prefix = y !== ymd(realToday()).y ? `${y}년 ` : "";
+  return `${prefix}${m}월 ${d}일(${DOW_KO[dow(e)]})`;
+}
+const fmtKm = (v) => Math.round(v).toLocaleString("en-US");
+const hhmm = (h, m) => `${h}:${String(m).padStart(2, "0")}`;
+const escapeHtml = (s) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+/** 받침에 맞춰 이/가, 을/를을 붙인다. */
+function josa(word, withBatchim, without) {
+  const c = word.charCodeAt(word.length - 1);
+  if (c < 0xac00 || c > 0xd7a3) return word + without;
+  return word + (((c - 0xac00) % 28) ? withBatchim : without);
+}
+
+/* ---------- 가혹 조건 12가지 (국문 취급설명서 번호 순) + 미국판의 오래된 차량 조건 ---------- */
+const POWERTRAIN = { GASOLINE: "가솔린", GASOLINE_TURBO: "가솔린 터보", LPG: "LPG", DIESEL: "디젤", HYBRID: "하이브리드", EV: "전기" };
+const SEVERE = [
+  ["SHORT_TRIPS", "짧은 거리 반복 주행"], ["DUST", "모래·먼지가 많은 지역 주행"], ["IDLING", "과다한 공회전"],
+  ["CONGESTION", "교통 체증이 심한 구역 주행"], ["ROUGH_ROAD", "잦은 험로 주행"], ["MOUNTAIN", "산길·오르막·내리막 주행"],
+  ["COMMERCIAL", "택시·상용차 등으로 사용"], ["HIGH_SPEED", "잦은 고속 주행·급가감속"], ["STOP_AND_GO", "정지와 출발의 잦은 반복"],
+  ["SALT_COLD", "소금·부식 물질 위 또는 한랭 지역 주행"], ["TOWING", "견인·캠핑용 사용, 지붕 짐칸 탑재"],
+  ["NON_RECOMMENDED_OIL", "추천하지 않는 엔진 오일 사용"], ["OLD_VEHICLE", "10년 또는 150,000 km 이상 운행"],
+];
+const SEVERE_LABEL = Object.fromEntries(SEVERE);
+const SEVERE_NUMBER = Object.fromEntries(SEVERE.slice(0, 12).map(([k], i) => [k, i + 1]));
+/** 설명서 표의 "주행 조건" 번호 목록을 조건 집합으로 바꾼다. */
+const COND = (...nums) => new Set(nums.map((n) => SEVERE[n - 1][0]));
+const ALL_CONDITIONS = new Set(SEVERE.map(([k]) => k));
+/** 차량·내비 데이터로 앱이 판단하는 조건. 나머지는 사용자가 설정에서 고른다. */
+const AUTO_CONDITIONS = new Set(["SHORT_TRIPS", "CONGESTION", "STOP_AND_GO", "MOUNTAIN", "OLD_VEHICLE"]);
+const VERB = { REPLACE: "교체", INSPECT: "점검", ROTATE: "교환" };
+
+/* ---------- 차종별 정기 점검 주기 (현대차 공식 취급설명서 국문판 "통상 조건 / 가혹 조건" 표) ---------- */
+const iv = (km, months) => ({ km, months });
+const describe = (i) => "매 " + [i.km != null ? `${i.km.toLocaleString("en-US")} km` : null, i.months != null ? `${i.months}개월` : null].filter(Boolean).join(" 또는 ");
+const condNumbers = (set) => [...set].map((c) => SEVERE_NUMBER[c]).filter(Boolean).sort((a, b) => a - b).join(", ");
+
+/**
+ * 엔진오일은 기획서의 가혹도 지수(HCI)를 쓴다. 가중치는 기획서 8.2의 엔진오일 행이다.
+ * 공회전(3번)은 차량 데이터로 잴 수 없어 사용자가 고른 경우에만 1로 들어간다.
+ */
+const OIL_HCI = { weights: { SHORT_TRIPS: 0.35, CONGESTION: 0.30, IDLING: 0.20, STOP_AND_GO: 0.15 }, gamma: 1.15 };
+const engineOil = (n, s) => ({ id: "engine-oil", name: "엔진오일·오일필터", action: "REPLACE", normal: iv(n, 12), severe: iv(s, 6), severeWhen: ALL_CONDITIONS, hci: OIL_HCI });
+const airCleaner = (km) => ({ id: "air-cleaner", name: "에어클리너 필터", action: "REPLACE", normal: iv(km, null) });
+const sparkPlug = (km) => ({ id: "spark-plug", name: "점화 플러그", action: "REPLACE", normal: iv(km, null) });
+const cabinFilter = { id: "cabin-filter", name: "에어컨 필터", action: "REPLACE", normal: iv(null, 12) };
+const cabinFilterCheck = { id: "cabin-filter", name: "에어컨 필터", action: "INSPECT", normal: iv(null, 12) };
+const cabinFilterByKm = { id: "cabin-filter", name: "에어컨 필터", action: "REPLACE", normal: iv(15000, null) };
+const brakeFluid = { id: "brake-fluid", name: "브레이크액", action: "REPLACE", normal: iv(50000, null) };
+const coolant = { id: "coolant", name: "냉각수", action: "REPLACE", normal: iv(40000, 24), first: iv(200000, 120) };
+const tireRotation = { id: "tire-rotation", name: "타이어 위치", action: "ROTATE", normal: iv(10000, null) };
+const dieselFuelFilter = { id: "fuel-filter", name: "연료필터 카트리지", action: "REPLACE", normal: iv(60000, null) };
+/** 통상 조건에서는 "무점검, 무교체"이고 가혹 조건에서만 교체한다. 해당 조건 번호는 차종마다 다르다. */
+const transOil = (km, ...nums) => ({ id: "trans-oil", name: "변속기 오일", action: "REPLACE", normal: null, severe: iv(km, null), severeWhen: COND(...nums) });
+const AT_OIL = transOil(100000, 1, 4, 5, 6, 7, 8, 9, 11);
+const reductionGearOil = { id: "reduction-gear-oil", name: "감속기 오일", action: "INSPECT", normal: iv(60000, null) };
+const reductionGearOilSevere = { id: "reduction-gear-oil-replace", name: "감속기 오일", action: "REPLACE", normal: null, severe: iv(120000, null), severeWhen: COND(2, 4, 6, 10) };
+const engineRules = (oil, airKm, plugKm, cabin, trans, ...extra) =>
+  [oil, tireRotation, airCleaner(airKm), plugKm ? sparkPlug(plugKm) : null, cabin, brakeFluid, coolant, trans, ...extra].filter(Boolean);
+const evRules = [tireRotation, reductionGearOil, reductionGearOilSevere, cabinFilter, brakeFluid, coolant];
+const spec = (id, model, engine, powertrain, manual, rules) => ({ id, model, engine, powertrain, manual, rules, label: `${model} ${engine}` });
+
+const SPECS = [
+  spec("dn8-g20", "쏘나타", "2.0 가솔린", "GASOLINE", "쏘나타(DN8) 2026", engineRules(engineOil(15000, 7500), 60000, 165000, cabinFilter, AT_OIL)),
+  spec("dn8-l20", "쏘나타", "2.0 LPG", "LPG", "쏘나타(DN8) 2026", engineRules(engineOil(15000, 7500), 60000, 165000, cabinFilter, AT_OIL)),
+  spec("dn8-turbo", "쏘나타", "1.6·2.5 터보", "GASOLINE_TURBO", "쏘나타(DN8) 2026", engineRules(engineOil(10000, 5000), 60000, 70000, cabinFilter, transOil(100000, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11))),
+  spec("dn8-hev", "쏘나타", "하이브리드", "HYBRID", "쏘나타 하이브리드(DN8 HEV) 2026", engineRules(engineOil(15000, 7500), 40000, 165000, cabinFilter, AT_OIL)),
+  spec("gn7-ice", "그랜저", "가솔린·LPG", "GASOLINE", "그랜저(GN7) 2026", engineRules(engineOil(15000, 7500), 40000, 160000, cabinFilter, AT_OIL)),
+  spec("gn7-hev", "그랜저", "1.6 터보 하이브리드", "HYBRID", "그랜저 하이브리드(GN7 HEV) 2026", engineRules(engineOil(10000, 5000), 40000, 160000, cabinFilter, AT_OIL)),
+  spec("nx4-t16", "투싼", "1.6 터보", "GASOLINE_TURBO", "투싼(NX4) 2026", engineRules(engineOil(10000, 5000), 40000, 75000, cabinFilterCheck, transOil(100000, 1, 4, 5, 6, 7, 8))),
+  spec("nx4-hev", "투싼", "1.6 터보 하이브리드", "HYBRID", "투싼 하이브리드(NX4 HEV) 2026", engineRules(engineOil(10000, 5000), 40000, 75000, cabinFilter, transOil(100000, 1, 4, 5, 6, 7, 8))),
+  spec("mx5-t25", "싼타페", "2.5 터보", "GASOLINE_TURBO", "싼타페(MX5) 2026", engineRules(engineOil(10000, 5000), 40000, 70000, cabinFilter, transOil(100000, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11))),
+  spec("mx5-hev", "싼타페", "1.6 터보 하이브리드", "HYBRID", "싼타페 하이브리드(MX5 HEV) 2026", engineRules(engineOil(10000, 5000), 40000, 75000, cabinFilter, AT_OIL)),
+  spec("sx2-t16", "코나", "1.6 터보", "GASOLINE_TURBO", "코나(SX2) 2025", engineRules(engineOil(10000, 5000), 60000, 75000, cabinFilter, AT_OIL)),
+  spec("sx2-g20", "코나", "2.0 가솔린", "GASOLINE", "코나(SX2) 2025", engineRules(engineOil(15000, 7500), 60000, 165000, cabinFilter, AT_OIL)),
+  spec("sx2-hev", "코나", "하이브리드", "HYBRID", "코나 하이브리드(SX2 HEV) 2025", engineRules(engineOil(15000, 7500), 60000, 75000, cabinFilter, transOil(120000, 4, 5, 6, 7, 8, 10, 11))),
+  spec("lx2-g38", "팰리세이드", "3.8 가솔린 (2024)", "GASOLINE", "팰리세이드(LX2) 2024", engineRules(engineOil(15000, 7500), 40000, 160000, cabinFilterByKm, AT_OIL)),
+  spec("lx2-d22", "팰리세이드", "2.2 디젤 (2024)", "DIESEL", "팰리세이드(LX2) 2024", engineRules(engineOil(20000, 10000), 40000, null, cabinFilterByKm, AT_OIL, dieselFuelFilter)),
+  spec("lx3-t25", "팰리세이드", "2.5 터보", "GASOLINE_TURBO", "팰리세이드(LX3) 2026", engineRules(engineOil(10000, 5000), 40000, 160000, cabinFilterCheck, AT_OIL)),
+  spec("us4-l35", "스타리아", "3.5 LPG", "LPG", "스타리아(US4) 2026", engineRules(engineOil(15000, 7500), 40000, 160000, cabinFilterCheck, AT_OIL)),
+  spec("ne1", "아이오닉 5", "전기", "EV", "아이오닉 5(NE1) 2026", evRules),
+  spec("ce1", "아이오닉 6", "전기", "EV", "아이오닉 6(CE1) 2025", evRules),
+];
+const specById = (id) => SPECS.find((s) => s.id === id) || null;
+
+/** 차량이 보내는 오일 양 신호(부족). 교체 주기와 별개로 바로 점검을 제안한다. */
+const WARNING_RULES = {
+  "oil-level": { id: "oil-level", name: "엔진오일 양", action: "INSPECT", normal: null, warning: "차량이 엔진오일 양 '부족' 신호를 보냈어요" },
+  "brake-fluid-level": { id: "brake-fluid-level", name: "브레이크액 양", action: "INSPECT", normal: null, warning: "차량이 브레이크액 양 '부족' 신호를 보냈어요" },
+};
+
+/* ---------- 시연용 장소·정비소 ---------- */
+const FALLBACK_ODOMETER_KM = 32000;
+const DEFAULT_SPEC = { ENGINE: "nx4-t16", EV: "ne1" };
+const PLACES = {
+  HOME: { kind: "HOME", name: "집 (샘플)", lat: 37.3830, lon: 127.1190 },
+  OFFICE: { kind: "OFFICE", name: "회사 (샘플)", lat: 37.4985, lon: 127.0330 },
+};
+/** partner: 블루핸즈와 제휴했다고 가정한 정비소. 빈 시간을 바로 알 수 있고 퇴근길 연장 시간(18:10)을 연다. */
+const SHOPS = [
+  { id: "demo-gaepo", name: "샘플 블루핸즈 개포", partner: true, lat: 37.4696, lon: 127.0545 },
+  { id: "demo-yeoksam", name: "샘플 블루핸즈 역삼", partner: true, lat: 37.5005, lon: 127.0400 },
+  { id: "demo-gangnam", name: "샘플 블루핸즈 강남", partner: false, lat: 37.4950, lon: 127.0300 },
+  { id: "demo-bundang", name: "샘플 블루핸즈 분당", partner: false, lat: 37.3800, lon: 127.1150 },
+  { id: "demo-pangyo", name: "샘플 블루핸즈 판교", partner: false, lat: 37.3950, lon: 127.1100 },
+];
+
+function distanceKm(a, b) {
+  const rad = (x) => x * Math.PI / 180;
+  const dLat = rad(b.lat - a.lat), dLon = rad(b.lon - a.lon);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLon / 2) ** 2;
+  return 2 * 6371 * Math.asin(Math.sqrt(h));
+}
+/**
+ * 회사 → 정비소 → 집으로 갈 때 더 걸리는 시간(분) 추정. 직선거리에 도로 계수 1.3, 평균 30 km/h를 쓴다.
+ * 차에서는 내비게이션에 정비소까지의 거리·도착 예정 시간을 물어 계산한다.
+ */
+const ROAD_FACTOR = 1.3, CITY_KMH = 30;
+function detourMinutes(shop) {
+  const extra = distanceKm(PLACES.OFFICE, shop) + distanceKm(shop, PLACES.HOME) - distanceKm(PLACES.OFFICE, PLACES.HOME);
+  return Math.max(0, extra) * ROAD_FACTOR / CITY_KMH * 60;
+}
+
+/**
+ * 정비 시간대 (기획서 6.2의 세 가지 + 토요일 오전).
+ * 일반 정비소는 08:30~18:00 영업이라 퇴근길 연장 시간은 제휴 정비소만 연다.
+ */
+const WEEKDAYS = [1, 2, 3, 4, 5];
+const SLOT_TYPES = [
+  { id: "A", label: "퇴근길", days: WEEKDAYS, hour: 18, minute: 10, partnerOnly: true, fits: (s) => detourMinutes(s) <= 5,
+    cost: (s) => detourMinutes(s), costText: (s) => `퇴근길 우회 약 ${Math.max(1, Math.round(detourMinutes(s)))}분` },
+  { id: "B", label: "출근길에 맡기고 퇴근길에 찾기", days: WEEKDAYS, hour: 8, minute: 30, fits: (s) => distanceKm(PLACES.OFFICE, s) <= 1.5,
+    cost: (s) => distanceKm(PLACES.OFFICE, s), costText: (s) => `회사에서 ${distanceKm(PLACES.OFFICE, s).toFixed(1)} km` },
+  { id: "C", label: "점심시간", days: WEEKDAYS, hour: 12, minute: 0, fits: (s) => distanceKm(PLACES.OFFICE, s) <= 1.5,
+    cost: (s) => distanceKm(PLACES.OFFICE, s), costText: (s) => `회사에서 ${distanceKm(PLACES.OFFICE, s).toFixed(1)} km` },
+  { id: "S", label: "토요일 오전", days: [6], hour: 10, minute: 0, fits: (s) => distanceKm(PLACES.HOME, s) <= 5,
+    cost: (s) => distanceKm(PLACES.HOME, s), costText: (s) => `집에서 ${distanceKm(PLACES.HOME, s).toFixed(1)} km` },
+];
+const slotById = (id) => SLOT_TYPES.find((s) => s.id === id);
+/** 제휴 정비소의 빈 시간(시연 값). 같은 날·정비소·시간대면 늘 같은 답을 내고, 4개 중 1개꼴로 차 있다. 오늘 퇴근길은 비워 둔다고 가정한다. */
+function partnerOpen(shop, date, slot, today) {
+  if (date === today) return true;
+  let h = 7;
+  for (const ch of `${shop.id}|${date}|${slot.id}`) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return h % 4 !== 0;
+}
+
+function initialItems(sp, km, today) {
+  return sp.rules.map((r) => {
+    switch (r.id) {
+      case "tire-rotation": return item(r.id, km - 9000, plusMonths(today, -5));
+      case "engine-oil": return item(r.id, km - (r.severe.km - 1500), plusMonths(today, -5));
+      case "coolant": return item(r.id, km - 45000, plusMonths(today, -36), false);
+      case "cabin-filter": return item(r.id, km - 9000, plusMonths(today, -7));
+      case "trans-oil": case "reduction-gear-oil-replace": return item(r.id, 0, plusMonths(today, -36));
+      default: return item(r.id, km - (r.normal?.km || 0) * 0.4, plusMonths(today, -10));
+    }
+  });
+}
+function item(ruleId, lastServiceKm, lastServiceDate, replacedBefore = true) {
+  return { ruleId, lastServiceKm, lastServiceDate, replacedBefore, booking: null, snoozedUntil: null };
+}
+/**
+ * 시연용 주행 묶음. congestion: 경로 중 정체 비율, brakes: 분당 브레이크 밟은 횟수, downhill: 지난 급경사 내리막 주의 구간 수.
+ * 값이 배열이면 주행마다 차례로 돌려 쓴다 (출퇴근은 네 번에 한 번 막히는 길).
+ */
+const DRIVE_PRESETS = {
+  day: { days: 1, kmPerDay: 40, trips: 2, kmh: 35, congestion: [0.2, 0.2, 0.2, 0.6], brakes: [0.8, 0.8, 0.8, 1.8], downhill: 0 },
+  commute: { days: 7, kmPerDay: 40, trips: 2, kmh: 35, congestion: [0.2, 0.2, 0.2, 0.6], brakes: [0.8, 0.8, 0.8, 1.8], downhill: 0 },
+  city: { days: 7, kmPerDay: 20, trips: 4, kmh: 15, congestion: 0.7, brakes: 2, downhill: 0 },
+  long: { days: 1, kmPerDay: 300, trips: 1, kmh: 80, congestion: 0.05, brakes: 0.2, downhill: 0 },
+  mountain: { days: 5, kmPerDay: 120, trips: 2, kmh: 45, congestion: 0.1, brakes: 1, downhill: 3 },
+};
+function demoTrips(date, p, startIndex) {
+  const km = p.kmPerDay / p.trips;
+  const pick = (v, i) => Array.isArray(v) ? v[(startIndex + i) % v.length] : v;
+  return Array.from({ length: p.trips }, (_, i) => ({
+    date, km, minutes: Math.max(1, Math.floor(km / p.kmh * 60)),
+    congestion: pick(p.congestion, i), brakesPerMin: pick(p.brakes, i), downhill: pick(p.downhill, i),
+  }));
+}
+
+/* ---------- 주행 기록 → 가혹 조건별 점수 (기획서 8.1·8.3) ---------- */
+const Driving = {
+  SHORT_TRIP_KM: 8, SLOW_TRIP_KMH: 20, CONGESTED_SHARE: 0.5, BRAKES_PER_MIN: 1.5,
+  APPLY_AT: 0.5, MIN_TRIPS: 10, WINDOW_DAYS: 30, LAMBDA: 0.15,
+  /** 주행 하나가 조건에 해당하는지. 데이터가 없으면 null이라 그 조건 계산에서 빠진다. */
+  tests: {
+    SHORT_TRIPS: (t) => t.km < 8,
+    CONGESTION: (t) => t.congestion != null ? t.congestion >= 0.5 : (t.minutes > 0 ? t.km / (t.minutes / 60) < 20 : null),
+    STOP_AND_GO: (t) => t.brakesPerMin == null ? null : t.brakesPerMin >= 1.5,
+    MOUNTAIN: (t) => t.downhill == null ? null : t.downhill > 0,
+  },
+  /** 최근 30일 주행으로 조건별 점수(0~1)를 낸다. 최근 주행일수록 크게 반영한다(지수 가중 평균, λ=0.15). */
+  analyze(trips, today, km, modelYear) {
+    const recent = trips.filter((t) => t.date >= today - Driving.WINDOW_DAYS);
+    const scores = {}, counts = {};
+    const detected = new Set();
+    for (const [cond, test] of Object.entries(Driving.tests)) {
+      const hits = recent.map(test).filter((v) => v != null);
+      counts[cond] = hits.length;
+      if (hits.length < Driving.MIN_TRIPS) { scores[cond] = null; continue; }
+      let score = hits[0] ? 1 : 0;
+      for (const hit of hits.slice(1)) score = Driving.LAMBDA * (hit ? 1 : 0) + (1 - Driving.LAMBDA) * score;
+      scores[cond] = score;
+      if (score >= Driving.APPLY_AT) detected.add(cond);
+    }
+    const old = modelYear != null && ymd(today).y - modelYear >= 10;
+    if (old || km >= 150000) detected.add("OLD_VEHICLE");
+    return { tripCount: recent.length, scores, counts, detected };
+  },
+};
+
+/** 부품의 가혹도 지수 = 조건별 점수의 가중 평균. 사용자가 고른 조건은 1이다. */
+function hciOf(weights, scores) {
+  let sum = 0, total = 0;
+  for (const [cond, w] of Object.entries(weights)) { sum += w * (scores[cond] ?? 0); total += w; }
+  return total ? sum / total : 0;
+}
+
+/* ---------- 판단 규칙 ---------- */
+const Planner = {
+  DEFAULT_DAILY_KM: 40, BOOKING_MAX_DAYS: 42, TOGETHER_DAYS: 30, TARGET_LEAD_DAYS: 7, MAX_OPTIONS: 3,
+
+  dailyKm(samples, today) {
+    const recent = samples.filter((s) => s.date >= today - 28).sort((a, b) => a.date - b.date);
+    if (!recent.length) return null;
+    const first = recent[0], last = recent[recent.length - 1];
+    const days = last.date - first.date;
+    if (days < 7) return null;
+    return Math.max((last.km - first.km) / days, 0);
+  },
+
+  /**
+   * 지금 적용할 주기.
+   * - 설명서 기준: 해당 가혹 조건이 하나라도 확정되면(점수 0.5 이상 또는 사용자가 고름) 가혹 주기를 쓴다.
+   * - 아직 확정 전이면 가혹도 지수만큼 통상 주기를 앞당긴다. 통상 주기보다 늦어지는 일은 없다.
+   */
+  applied(rule, it, conditions, scores) {
+    if (!it.replacedBefore && rule.first) return { interval: rule.first, basis: "FIRST", because: [] };
+    const because = rule.severeWhen ? [...conditions].filter((c) => rule.severeWhen.has(c)) : [];
+    if (rule.severe && because.length) return { interval: rule.severe, basis: "SEVERE", because };
+    if (rule.hci && rule.normal && rule.severe) {
+      const hci = hciOf(rule.hci.weights, scores);
+      const km = Math.round((rule.normal.km - (rule.normal.km - rule.severe.km) * hci ** rule.hci.gamma) / 100) * 100;
+      if (km < rule.normal.km) return { interval: iv(km, rule.normal.months), basis: "ADJUSTED", because: [], hci };
+    }
+    return { interval: rule.normal, basis: rule.normal ? "NORMAL" : "NONE", because: [] };
+  },
+
+  remainingKm: (it, interval, km) => interval?.km == null ? null : interval.km - (km - it.lastServiceKm),
+
+  dueDate(it, interval, km, today, daily) {
+    if (!interval) return null;
+    const byTime = interval.months == null ? null : plusMonths(it.lastServiceDate, interval.months);
+    const remaining = Planner.remainingKm(it, interval, km);
+    let byDistance = null;
+    if (remaining != null) {
+      if (remaining <= 0) byDistance = today;
+      else if (daily > 0) byDistance = today + Math.ceil(remaining / daily);
+    }
+    const candidates = [byTime, byDistance].filter((v) => v != null);
+    return candidates.length ? Math.max(Math.min(...candidates), today) : null;
+  },
+
+  /** 공개 예약 규칙: 3일 뒤부터 6주 안, 월요일은 5일 뒤부터. */
+  isBookable(date, today) {
+    const days = date - today;
+    const min = dow(date) === 1 ? 5 : 3;
+    return days >= min && days <= Planner.BOOKING_MAX_DAYS;
+  },
+
+  /**
+   * target 날짜에 가까운 예약 후보. 같은 날이면 우회 시간·거리가 짧은 순이다.
+   * 제휴 정비소: 내일부터(오늘은 퇴근길만) 빈 시간을 바로 잡는다. 일반 정비소: 공개 예약 규칙을 따른다.
+   */
+  options(sit, target, lastDay) {
+    const today = sit.today;
+    const out = [];
+    for (let date = today; date <= lastDay; date++) {
+      for (const slot of SLOT_TYPES) {
+        if (!slot.days.includes(dow(date))) continue;
+        for (const shop of sit.shops) {
+          if (slot.partnerOnly && !shop.partner) continue;
+          if (!slot.fits(shop)) continue;
+          if (shop.partner) {
+            if (date === today && slot.id !== "A") continue;
+            if (!partnerOpen(shop, date, slot, today)) continue;
+          } else if (!Planner.isBookable(date, today)) continue;
+          out.push({ date, slot, shop, cost: slot.cost(shop), costText: slot.costText(shop) });
+        }
+      }
+    }
+    return out
+      .sort((a, b) => (Math.abs(a.date - target) - Math.abs(b.date - target)) || (a.date - b.date) || (a.cost - b.cost))
+      .slice(0, Planner.MAX_OPTIONS);
+  },
+
+  ruleFor(sit, ruleId) { return sit.spec.rules.find((r) => r.id === ruleId) || WARNING_RULES[ruleId] || null; },
+
+  statuses(sit) {
+    const daily = Planner.dailyKm(sit.samples, sit.today) ?? Planner.DEFAULT_DAILY_KM;
+    return sit.items.map((it) => {
+      const rule = Planner.ruleFor(sit, it.ruleId);
+      if (!rule) return null;
+      if (rule.warning) return { item: it, rule, applied: { interval: null, basis: "WARNING", because: [] }, dueDate: sit.today };
+      const applied = Planner.applied(rule, it, sit.conditions, sit.scores);
+      return { item: it, rule, applied, dueDate: Planner.dueDate(it, applied.interval, sit.currentKm, sit.today, daily) };
+    }).filter(Boolean);
+  },
+
+  /** 지금 할 일 하나를 고른다. 정비일 안내 → 차량 경고 → 예약 앞당기기 → 새 예약 제안 순이다. */
+  decide(sit) {
+    const today = sit.today;
+    const all = Planner.statuses(sit);
+    const awake = (s) => !(s.item.snoozedUntil != null && s.item.snoozedUntil > today);
+    const minBy = (arr, f) => arr.reduce((m, x) => (m == null || f(x) < f(m)) ? x : m, null);
+    const togetherWith = (primary, until) => all.filter((s) => s !== primary && !s.item.booking && s.dueDate != null && s.dueDate <= until);
+
+    const visit = minBy(all.filter((s) => s.item.booking && s.item.booking.date <= today), (s) => s.item.booking.date);
+    if (visit) {
+      const b = visit.item.booking;
+      return { type: "VisitDay", rules: all.filter((s) => s.item.booking?.confirmation === b.confirmation).map((s) => s.rule), booking: b, shop: sit.shops.find((x) => x.id === b.shopId) || null };
+    }
+    const warning = all.find((s) => s.applied.basis === "WARNING" && !s.item.booking && awake(s));
+    if (warning) {
+      return Planner.propose(warning, sit, { reschedule: false, together: togetherWith(warning, today + Planner.TOGETHER_DAYS), target: today, lastDay: today + 7 });
+    }
+    const late = minBy(all.filter((s) => s.item.booking && awake(s) && s.dueDate != null && s.dueDate < s.item.booking.date), (s) => s.dueDate);
+    if (late) {
+      const same = all.filter((s) => s !== late && s.item.booking?.confirmation === late.item.booking.confirmation);
+      return Planner.propose(late, sit, { reschedule: true, together: same });
+    }
+    const soon = minBy(all.filter((s) => !s.item.booking && awake(s) && s.dueDate != null && s.dueDate <= today + Planner.BOOKING_MAX_DAYS), (s) => s.dueDate);
+    if (soon) return Planner.propose(soon, sit, { reschedule: false, together: togetherWith(soon, soon.dueDate + Planner.TOGETHER_DAYS) });
+    return { type: "AllGood" };
+  },
+
+  propose(status, sit, { reschedule, together, target, lastDay }) {
+    const due = status.dueDate;
+    const t = target ?? Math.max(due - Planner.TARGET_LEAD_DAYS, sit.today);
+    const options = Planner.options(sit, t, lastDay ?? Math.min(due, sit.today + Planner.BOOKING_MAX_DAYS));
+    if (!options.length) return { type: "TooLate", rule: status.rule, dueDate: due };
+    return { type: "Propose", rule: status.rule, applied: status.applied, dueDate: due, options, reschedule, together: together.map((s) => s.rule) };
+  },
+};
+
+/* ---------- 상태 ---------- */
+const STORE_KEY = "pitstop-web-v2";
+const EMPTY = () => ({ energy: "ENGINE", specId: null, items: [], samples: [], trips: [], declared: [], demoDayOffset: 0, demoExtraKm: 0 });
+let saved = load();
+let optionIndex = 0, proposalKey = null, notice = null, settingsOpen = false;
+let voiceOn = false, spokenKey = null;
+
+function load() {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    if (raw) return { ...EMPTY(), ...JSON.parse(raw) };
+  } catch (e) { /* 저장소를 쓸 수 없으면 처음 상태로 시작한다 */ }
+  return EMPTY();
+}
+function persist() { try { localStorage.setItem(STORE_KEY, JSON.stringify(saved)); } catch (e) { /* 무시 */ } }
+
+const today = () => realToday() + saved.demoDayOffset;
+const currentKm = () => FALLBACK_ODOMETER_KM + saved.demoExtraKm;
+const currentSpec = () => specById(saved.specId);
+const ruleName = (id) => (currentSpec().rules.find((r) => r.id === id) || WARNING_RULES[id])?.name ?? id;
+
+function start() {
+  if (!saved.specId) saved.specId = DEFAULT_SPEC[saved.energy];
+  if (!saved.items.length) saved.items = initialItems(currentSpec(), currentKm(), today());
+  recordSample();
+  refresh();
+}
+function recordSample() {
+  const t = today();
+  saved.samples = saved.samples.filter((s) => s.date !== t && s.date > t - 60).concat({ date: t, km: currentKm() });
+}
+function updateItem(ruleId, change) { saved.items = saved.items.map((it) => it.ruleId === ruleId ? change(it) : it); }
+function refresh() { persist(); render(); }
+
+function situation() {
+  const t = today(), km = currentKm();
+  const profile = Driving.analyze(saved.trips, t, km, null);
+  const conditions = new Set([...profile.detected, ...saved.declared]);
+  const scores = { ...profile.scores };
+  for (const c of saved.declared) scores[c] = 1;
+  return { today: t, currentKm: km, samples: saved.samples, spec: currentSpec(), items: saved.items, conditions, scores, shops: SHOPS, profile };
+}
+
+function confirmationOf(date, slot) {
+  const { y, m, d } = ymd(date);
+  return `DEMO-${y}${String(m).padStart(2, "0")}${String(d).padStart(2, "0")}-${String(slot.hour).padStart(2, "0")}${String(slot.minute).padStart(2, "0")}`;
+}
+
+const actions = {
+  accept() {
+    const a = view.action;
+    if (a?.type !== "Propose") return false;
+    const opt = a.options[view.optionIndex];
+    const booking = { shopId: opt.shop.id, date: opt.date, hour: opt.slot.hour, minute: opt.slot.minute, slotId: opt.slot.id, confirmation: confirmationOf(opt.date, opt.slot) };
+    const ids = new Set([a.rule.id, ...a.together.map((r) => r.id)]);
+    saved.items = saved.items.map((it) => ids.has(it.ruleId) ? { ...it, booking, snoozedUntil: null } : it);
+    const names = [a.rule, ...a.together].map((r) => r.name).join(", ");
+    const waypoint = opt.date === today()
+      ? ` 내비게이션에 ${josa(opt.shop.name, "을", "를")} 경유지로 넣었어요 (웹에서는 요청 내용만 보여 줘요: ${opt.shop.lat.toFixed(4)}, ${opt.shop.lon.toFixed(4)}).`
+      : "";
+    notice = `${opt.shop.name} ${korean(opt.date)} ${hhmm(opt.slot.hour, opt.slot.minute)}에 예약했어요 (${names}). 확인번호 ${booking.confirmation}.${waypoint} 휴대폰 확인 알림도 보낸 것으로 칩니다 (시연용 예약).`;
+    refresh();
+    return true;
+  },
+  next() {
+    const a = view.action;
+    if (a?.type !== "Propose" || view.optionIndex + 1 >= a.options.length) return false;
+    optionIndex += 1; render(); return true;
+  },
+  snooze() {
+    const a = view.action;
+    if (a?.type !== "Propose" && a?.type !== "TooLate") return false;
+    updateItem(a.rule.id, (it) => ({ ...it, snoozedUntil: today() + 3 }));
+    notice = "3일 뒤에 다시 물어볼게요.";
+    refresh();
+    return true;
+  },
+  complete(ruleIds) {
+    const km = currentKm(), t = today();
+    const names = ruleIds.map(ruleName).join(", ");
+    saved.items = saved.items.filter((it) => !(WARNING_RULES[it.ruleId] && ruleIds.includes(it.ruleId)));
+    ruleIds.forEach((id) => updateItem(id, (it) => ({ ...it, lastServiceKm: km, lastServiceDate: t, replacedBefore: true, booking: null, snoozedUntil: null })));
+    notice = `기록했어요: ${names}. 다음 주기를 다시 계산합니다.`;
+    refresh();
+    return true;
+  },
+  navi(kind) {
+    const shop = view.action?.shop;
+    if (!shop) return false;
+    const what = kind === "route" ? "목적지로 길 안내를" : "지금 경로에 경유지 추가를";
+    notice = `${shop.name} (${shop.lat.toFixed(4)}, ${shop.lon.toFixed(4)}): 차에서는 내비게이션에 ${what} 요청해요. 웹에서는 요청 내용만 보여 줍니다.`;
+    render();
+    return true;
+  },
+  drive(name) {
+    const p = DRIVE_PRESETS[name];
+    if (!p) return;
+    for (let i = 0; i < p.days; i++) {
+      saved.demoDayOffset += 1;
+      saved.demoExtraKm += p.kmPerDay;
+      saved.tripCounter = (saved.tripCounter ?? 0) + p.trips;
+      saved.trips = saved.trips.concat(demoTrips(today(), p, saved.tripCounter - p.trips)).slice(-300);
+      recordSample();
+    }
+    notice = null;
+    refresh();
+  },
+  warn() {
+    const id = currentSpec().powertrain === "EV" ? "brake-fluid-level" : "oil-level";
+    if (!saved.items.some((it) => it.ruleId === id)) saved.items = saved.items.concat(item(id, currentKm(), today()));
+    notice = null;
+    refresh();
+  },
+  reset() {
+    saved = { ...EMPTY(), energy: saved.energy, specId: saved.specId, declared: saved.declared };
+    notice = null;
+    start();
+  },
+  selectSpec(id) {
+    const sp = specById(id);
+    if (!sp) return;
+    saved.specId = id;
+    saved.items = initialItems(sp, currentKm(), today());
+    notice = `${sp.label} 기준으로 바꿨어요. 근거: ${sp.manual} 취급설명서`;
+    refresh();
+  },
+  toggle(cond) {
+    const set = new Set(saved.declared);
+    set.has(cond) ? set.delete(cond) : set.add(cond);
+    saved.declared = [...set];
+    notice = null;
+    refresh();
+  },
+  energy(kind) {
+    saved.energy = kind;
+    actions.selectSpec(DEFAULT_SPEC[kind]);
+  },
+  voice() {
+    voiceOn = !voiceOn;
+    spokenKey = null;
+    if (!voiceOn && "speechSynthesis" in window) speechSynthesis.cancel();
+    render();
+  },
+};
+
+/* ---------- 말로 답하기: 차에서는 Pleos 음성인식과 LLM이 의도를 고른다. 웹에서는 낱말로 고른다. ---------- */
+function intentOf(text) {
+  const t = text.replace(/\s+/g, "");
+  if (/경유/.test(t)) return "waypoint";
+  if (/(안내|길찾|가자|출발)/.test(t)) return "route";
+  if (/(완료|끝났|마쳤|받았)/.test(t)) return "complete";
+  if (/(다른|다음시간|다른날|바꿔|말고)/.test(t)) return "next";
+  if (/(나중|다음에|이따|미뤄|아니|싫)/.test(t)) return "snooze";
+  if (/(예약|응|네|좋아|그래|해줘|앞당|들를|오케이|ok)/i.test(t)) return "accept";
+  return null;
+}
+const INTENT_LABEL = { accept: "예약하기", next: "다른 시간", snooze: "나중에", route: "바로 안내", waypoint: "경유지로 추가", complete: "정비 완료" };
+function handleSay(text) {
+  const said = text.trim();
+  if (!said) return;
+  const intent = intentOf(said);
+  const a = view.action;
+  let done = false;
+  notice = null;
+  if (intent === "accept") done = actions.accept();
+  else if (intent === "next") done = actions.next();
+  else if (intent === "snooze") done = actions.snooze();
+  else if (intent === "route" || intent === "waypoint") done = a?.type === "VisitDay" && actions.navi(intent);
+  else if (intent === "complete") {
+    if (a?.type === "VisitDay") done = actions.complete(a.rules.map((r) => r.id));
+    else if (a?.type === "TooLate") done = actions.complete([a.rule.id]);
+  }
+  const heard = `"${escapeHtml(said)}"`;
+  const label = intent === "accept" && a?.reschedule ? "앞당기기" : INTENT_LABEL[intent];
+  if (!intent) notice = `${heard}: 알아듣지 못했어요. 예: "응, 예약해줘", "다른 시간", "나중에"`;
+  else if (!done) notice = `${heard}: ${josa(label, "으로", "로")} 알아들었지만 지금 화면에서는 할 수 없어요.`;
+  else notice = `${heard} → ${label}. ${notice ?? ""}`;
+  render();
+}
+function speak(text) {
+  if (!voiceOn || !("speechSynthesis" in window)) return;
+  try {
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = "ko-KR";
+    speechSynthesis.speak(u);
+  } catch (e) { /* 음성 출력을 못 해도 화면 안내는 그대로 */ }
+}
+
+/* ---------- 화면 ---------- */
+let view = {};
+const isToday = (date) => date === today();
+
+function render() {
+  const sit = situation();
+  const action = Planner.decide(sit);
+  const key = action.type === "Propose" ? `${action.rule.id}|${action.reschedule}` : null;
+  if (key !== proposalKey) { proposalKey = key; optionIndex = 0; }
+  const idx = action.type === "Propose" ? Math.min(optionIndex, action.options.length - 1) : 0;
+  const rows = Planner.statuses(sit)
+    .map((s) => ({ ...s, remainingKm: Planner.remainingKm(s.item, s.applied.interval, sit.currentKm) }))
+    .sort((a, b) => (a.dueDate ?? Infinity) - (b.dueDate ?? Infinity));
+  view = { action, optionIndex: idx };
+
+  const measured = Planner.dailyKm(saved.samples, sit.today);
+  const sp = sit.spec;
+  const energyLabel = saved.energy === "EV" ? "전기차" : "엔진차";
+  const card = agentCard(action, idx, rows, sit);
+
+  document.getElementById("app").innerHTML = `
+    <div class="screen">
+      <section class="col" aria-label="에이전트 제안">
+        <header class="top">
+          <div>
+            <h1>피트스톱 · ${korean(sit.today)}</h1>
+            <p class="meta">주행거리 <span class="num">${fmtKm(sit.currentKm)} km</span> (가상 차량) · 하루 평균 <span class="num">${Math.round(measured ?? Planner.DEFAULT_DAILY_KM)} km</span>${measured == null ? " (기록 부족, 기본값)" : ""} · 집·회사: 샘플 장소</p>
+            <p class="meta">${sp.label} (${sp.manual} 취급설명서 기준) · 가상 차량 감지: ${energyLabel}</p>
+          </div>
+          <button class="btn small" data-act="voice" aria-pressed="${voiceOn}">음성 안내 ${voiceOn ? "켜짐" : "꺼짐"}</button>
+        </header>
+        ${card.html}
+        ${sayBar(action)}
+        ${notice ? `<p class="notice">${notice}</p>` : ""}
+        ${drivingCard(sit)}
+      </section>
+      <section class="col right" aria-label="소모품과 시연 조작">
+        <button class="btn wide" data-act="open">차량·주행 환경 설정</button>
+        <h2 class="section-title">소모품</h2>
+        ${rows.map((r) => itemCard(r, sit.today)).join("")}
+        <h2 class="section-title">시연 조작</h2>
+        <div class="buttons">
+          <button class="btn" data-act="drive" data-args="day">하루 지나기 +40km</button>
+          <button class="btn" data-act="drive" data-args="commute">출퇴근 1주 +280km</button>
+          <button class="btn" data-act="drive" data-args="city">시내 단거리 1주</button>
+          <button class="btn" data-act="drive" data-args="long">장거리 +300km</button>
+          <button class="btn" data-act="drive" data-args="mountain">산길 5일 +600km</button>
+          <button class="btn" data-act="warn">${sp.powertrain === "EV" ? "브레이크액" : "엔진오일"} 양 부족 신호</button>
+          <button class="btn" data-act="reset">처음부터</button>
+        </div>
+        <ul class="guide">
+          <li>퇴근길 정비: 처음부터 → 엔진오일 양 부족 신호 → "응, 예약해줘"</li>
+          <li>가혹도로 주기 바꾸기: 처음부터 → 출퇴근 1주(조금 앞당김) → 시내 단거리 1주(가혹 주기)</li>
+          <li>다시 계획하기: 처음부터 → 예약하기 → 장거리 두 번 → 앞당기기</li>
+          <li>정비일: 하루 지나기로 예약일까지 → 바로 안내 → 정비 완료</li>
+        </ul>
+      </section>
+    </div>
+    ${settingsOpen ? settingsDialog(sp) : ""}`;
+  if (settingsOpen) document.querySelector(".dialog")?.focus();
+
+  const sayKey = `${action.type}|${key}|${idx}|${action.booking?.confirmation ?? ""}`;
+  if (card.speech && sayKey !== spokenKey) { spokenKey = sayKey; speak(card.speech); }
+}
+
+function agentCard(a, idx, rows, sit) {
+  let inner = "", speech = null;
+  if (a.type === "AllGood") {
+    const first = rows.find((r) => r.dueDate != null);
+    inner = `<p class="title">모든 소모품이 여유 있어요</p>` +
+      (first ? `<p class="body">가장 먼저 오는 일: ${first.rule.name} ${VERB[first.rule.action]}, ${korean(first.dueDate)} 예상</p>` : "");
+  } else if (a.type === "Propose") {
+    const opt = a.options[idx];
+    const row = rows.find((r) => r.rule.id === a.rule.id);
+    const verb = VERB[a.rule.action];
+    const when = `${isToday(opt.date) ? "오늘" : korean(opt.date)} ${hhmm(opt.slot.hour, opt.slot.minute)}`;
+    if (a.applied.basis === "WARNING") {
+      inner += `<p class="kicker">차량 신호</p><p class="title">${a.rule.name} ${josa(verb, "이", "가")} 필요해요</p>`;
+    } else if (a.reschedule) {
+      inner += `<p class="title">예상보다 빨리 ${verb} 시점이 와요</p>
+        <p class="body">${a.rule.name} ${verb} 예상일이 ${korean(a.dueDate)}로 당겨져 예약일 ${korean(row.item.booking.date)}보다 빨라요.</p>`;
+    } else {
+      const remain = row?.remainingKm != null ? `남은 거리 약 <span class="num">${fmtKm(row.remainingKm)} km</span> · ` : "";
+      inner += `<p class="title">${a.rule.name} ${verb}까지 ${a.dueDate - sit.today}일 남았어요</p>
+        <p class="body">${remain}예상일 ${korean(a.dueDate)}</p>`;
+    }
+    inner += reason(a.rule, a.applied, sit);
+    if (a.together.length) inner += `<p class="body">같은 날 함께: ${a.together.map((r) => `${r.name} ${VERB[r.action]}`).join(", ")}</p>`;
+    const where = `${opt.shop.name}(${opt.shop.partner ? "제휴 가정" : "일반"})`;
+    const ask = opt.slot.id === "A"
+      ? `${when} 퇴근길에 ${where}에 들를까요? ${opt.costText}에 정비 시간이 더해져요.`
+      : `${when} ${opt.slot.label} · ${where} · ${opt.costText}. ${a.reschedule ? "앞당길까요" : "예약할까요"}?`;
+    const how = opt.shop.partner ? "제휴 정비소의 빈 시간을 바로 잡아요 (시연 값)." : "공개 예약 규칙(3일 뒤부터, 빈 시간은 정비소가 확정)을 따라요.";
+    inner += `<p class="question">${ask}</p>
+      <p class="detail">${how}${isToday(opt.date) ? " 승인하면 내비게이션에 경유지로 바로 넣어요." : ""}</p>
+      <div class="buttons">
+        <button class="btn primary" data-act="accept">${a.reschedule ? "앞당기기" : isToday(opt.date) ? "예약하고 경유지 추가" : "예약하기"}</button>
+        ${idx + 1 < a.options.length ? `<button class="btn" data-act="next">다른 시간</button>` : ""}
+        <button class="btn" data-act="snooze">나중에</button>
+      </div>`;
+    speech = `${a.rule.name} ${verb} 시점이 다가왔어요. ${ask.replace(/\(.*?\)/g, "")}`;
+  } else if (a.type === "TooLate") {
+    const verb = VERB[a.rule.action];
+    inner = `<p class="title">${a.rule.name} ${josa(verb, "이", "가")} 급해요</p>
+      <p class="body">예상일 ${korean(a.dueDate)}까지 잡을 수 있는 정비 시간이 없어요. 블루핸즈 전화 예약(080-600-6000)으로 가장 빠른 날을 잡아 보세요.</p>
+      <div class="buttons">
+        <button class="btn primary" data-act="complete" data-args="${a.rule.id}">${verb} 완료</button>
+        <button class="btn" data-act="snooze">나중에</button>
+      </div>`;
+    speech = `${a.rule.name} ${verb}가 급해요. 전화 예약으로 가장 빠른 날을 잡아 보세요.`;
+  } else if (a.type === "VisitDay") {
+    const overdue = a.booking.date < sit.today;
+    const slot = slotById(a.booking.slotId);
+    const onTheWay = slot?.id === "A" || slot?.id === "B";
+    inner = `<p class="title">${overdue ? "예약일이 지났어요. 정비를 마치셨나요?" : `오늘 ${hhmm(a.booking.hour, a.booking.minute ?? 0)} 정비가 있어요`}</p>
+      <p class="body">${a.rules.map((r) => `${r.name} ${VERB[r.action]}`).join(", ")}</p>
+      <p class="body">${korean(a.booking.date)} ${hhmm(a.booking.hour, a.booking.minute ?? 0)}${slot ? ` · ${slot.label}` : ""} · ${a.shop ? a.shop.name : "정비소"} · 확인번호 ${a.booking.confirmation}</p>
+      <div class="buttons">
+        ${a.shop ? (onTheWay
+          ? `<button class="btn primary" data-act="navi" data-args="waypoint">경유지로 추가</button><button class="btn" data-act="navi" data-args="route">바로 안내</button>`
+          : `<button class="btn primary" data-act="navi" data-args="route">바로 안내</button><button class="btn" data-act="navi" data-args="waypoint">경유지로 추가</button>`) : ""}
+        <button class="btn" data-act="complete" data-args="${a.rules.map((r) => r.id).join(",")}">정비 완료</button>
+      </div>`;
+    if (!overdue) speech = `오늘 ${a.booking.hour}시 ${a.booking.minute ? a.booking.minute + "분" : ""} ${a.shop ? a.shop.name : "정비소"}에서 정비가 있어요. 길 안내를 시작할까요?`;
+  }
+  return { html: `<article class="agent">${inner}</article>`, speech };
+}
+
+function reason(rule, applied, sit) {
+  if (applied.basis === "WARNING") return `<p class="reason severe">${rule.warning}. 교체 주기와 별개로 바로 점검해야 해요. 가장 빠른 퇴근길 시간을 찾았어요.</p>`;
+  if (applied.basis === "SEVERE") {
+    return `<p class="reason severe">가혹 조건(${applied.because.map((c) => SEVERE_LABEL[c]).join(", ")})이라 설명서대로 ${describe(applied.interval)}를 써요.${rule.normal ? ` 통상 조건은 ${describe(rule.normal)}` : " 통상 조건에서는 교체하지 않는 항목이에요."}</p>`;
+  }
+  if (applied.basis === "ADJUSTED") {
+    return `<p class="reason">가혹도 ${applied.hci.toFixed(2)}만큼 주기를 ${describe(applied.interval)}로 앞당겼어요. 통상 ${describe(rule.normal)} · 가혹 ${describe(rule.severe)}. 가혹 조건이 확정되면 가혹 주기를 써요.</p>`;
+  }
+  if (applied.basis === "FIRST") return `<p class="reason">아직 교체 기록이 없어 최초 주기 ${describe(applied.interval)}를 써요.</p>`;
+  return `<p class="reason">통상 조건 주기 ${describe(applied.interval)}</p>`;
+}
+
+function sayBar(a) {
+  if (a.type === "AllGood") return "";
+  return `<form class="say" data-form="say">
+      <input id="say" name="say" autocomplete="off" aria-label="말로 답하기" placeholder='말로 답하기: "응, 예약해줘", "다른 시간", "나중에"'>
+      <button class="btn small" type="submit">보내기</button>
+    </form>
+    <p class="say-hint">차에서는 스티어링 휠 음성 버튼과 Pleos 음성인식·LLM이 의도를 알아듣습니다. 웹에서는 글자로 입력하면 낱말로 알아듣습니다.</p>`;
+}
+
+const SCORE_ROWS = [
+  { cond: "SHORT_TRIPS", label: "짧은 거리 반복", rule: "한 번에 8 km 미만", src: "차량: 이번 주행 거리 (에뮬레이터 미지원, 실차 확인 필요)" },
+  { cond: "CONGESTION", label: "교통 체증", rule: "경로의 절반 이상이 정체, 정체 정보가 없으면 평균 20 km/h 미만", src: "내비게이션: 경로의 정체 구간 (길 안내 중일 때만) · 차량: 주행 시간" },
+  { cond: "STOP_AND_GO", label: "정지·출발 반복", rule: "분당 브레이크 1.5회 이상", src: "차량: 브레이크 페달 밟음 여부 (에뮬레이터 미확인)" },
+  { cond: "MOUNTAIN", label: "산길·내리막", rule: "급경사 내리막 주의 구간을 지남", src: "내비게이션: 주의 구간 (길 안내 중일 때만, 에뮬레이터 미확인)" },
+];
+
+function drivingCard(sit) {
+  const p = sit.profile;
+  const pct = (v) => `${Math.round(v * 100)}%`;
+  const oilRule = sit.spec.rules.find((r) => r.hci);
+  const declared = new Set(saved.declared);
+  const conds = [...sit.conditions];
+  const condText = conds.length
+    ? "가혹 조건: " + conds.map((c) => SEVERE_LABEL[c] + (declared.has(c) ? " (직접 선택)" : " (주행 기록)")).join(", ")
+    : "가혹 조건: 해당 없음";
+  const hci = oilRule ? hciOf(oilRule.hci.weights, sit.scores) : null;
+  return `<article class="card drive">
+    <h2>최근 30일 주행 패턴</h2>
+    <p class="muted">주행 ${p.tripCount}회. 조건마다 해당한 주행의 비율을 최근 주행일수록 크게 쳐서 계산해요. ${Driving.MIN_TRIPS}회 이상 모여야 판단하고, 50% 이상이면 설명서의 가혹 조건으로 봐요.</p>
+    <ul class="scores">
+      ${SCORE_ROWS.map((r) => {
+        const v = p.scores[r.cond];
+        const on = sit.conditions.has(r.cond);
+        return `<li><span class="label">${r.label} <span class="muted">· ${r.rule}</span></span>
+          <span class="value ${on ? "on" : ""}">${v == null ? `기록 ${p.counts[r.cond]}회` : pct(v)}</span>
+          <span class="src">${r.src}</span></li>`;
+      }).join("")}
+    </ul>
+    <p class="${conds.length ? "severe-text" : ""}">${condText}</p>
+    ${hci != null ? `<p class="muted">엔진오일 가혹도 ${hci.toFixed(2)} = 짧은 거리 0.35 · 체증 0.30 · 공회전 0.20(직접 선택 시) · 정지·출발 0.15 가중 평균</p>` : ""}
+    <p class="muted">바깥 온도는 차에서 읽을 수 없어 한랭 지역 조건은 설정에서 직접 골라요.</p>
+  </article>`;
+}
+
+function itemCard(r, t) {
+  const remain = r.remainingKm != null ? `남은 <span class="num">${fmtKm(r.remainingKm)} km</span> · ` : "";
+  let status, basis, severe = false;
+  if (r.applied.basis === "WARNING") {
+    status = r.item.booking ? `예약 ${korean(r.item.booking.date)} ${hhmm(r.item.booking.hour, r.item.booking.minute ?? 0)}` : "지금 점검 필요";
+    basis = r.rule.warning;
+    severe = true;
+  } else {
+    status = r.item.booking ? `예약 ${korean(r.item.booking.date)} ${hhmm(r.item.booking.hour, r.item.booking.minute ?? 0)}`
+      : (r.item.snoozedUntil != null && r.item.snoozedUntil > t) ? `${korean(r.item.snoozedUntil)}까지 미룸`
+      : r.applied.basis === "NONE" ? "통상 조건에서는 교체하지 않아요"
+      : r.dueDate != null ? `예상 ${korean(r.dueDate)}` : "최근 주행이 없어 예측 불가";
+    severe = r.applied.basis === "SEVERE";
+    basis = {
+      FIRST: () => `최초 주기 ${describe(r.applied.interval)}`,
+      NORMAL: () => `통상 조건 ${describe(r.applied.interval)}`,
+      SEVERE: () => `가혹 조건 ${describe(r.applied.interval)}`,
+      ADJUSTED: () => `가혹도 ${r.applied.hci.toFixed(2)} 반영 ${describe(r.applied.interval)} (통상 ${fmtKm(r.rule.normal.km)} · 가혹 ${fmtKm(r.rule.severe.km)} km)`,
+      NONE: () => `가혹 조건(${condNumbers(r.rule.severeWhen)}번)일 때만 ${describe(r.rule.severe)} 교체`,
+    }[r.applied.basis]();
+  }
+  return `<div class="card item">
+    <span class="name">${r.rule.name} ${VERB[r.rule.action]}</span>
+    <span class="status">${remain}${status}</span>
+    <span class="basis ${severe ? "severe" : ""}">${basis}</span>
+  </div>`;
+}
+
+function settingsDialog(current) {
+  const matches = (sp) => saved.energy === "EV" ? sp.powertrain === "EV" : sp.powertrain !== "EV";
+  const declared = new Set(saved.declared);
+  return `<div class="scrim" data-act="close">
+    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabindex="-1">
+      <header id="settings-title">차량·주행 환경</header>
+      <div class="content">
+        <h3>가상 차량 (웹 시뮬레이터 전용)</h3>
+        <p class="mismatch">앱은 차량의 연료·배터리 정보로 엔진차인지 전기차인지 알아냅니다. 웹에서는 여기서 고릅니다.</p>
+        ${["ENGINE", "EV"].map((k) => `<button class="radio" role="radio" aria-checked="${saved.energy === k}" data-act="energy" data-args="${k}"><span class="dot"></span>${k === "EV" ? "전기차 (기본 차종: 아이오닉 5)" : "엔진차 (기본 차종: 투싼 1.6 터보)"}</button>`).join("")}
+        <h3>차종 (현대차 취급설명서 정기 점검표 기준)</h3>
+        ${SPECS.map((sp) => `<button class="radio" role="radio" aria-checked="${current.id === sp.id}" data-act="spec" data-args="${sp.id}">
+            <span class="dot"></span><span>${sp.label} · ${POWERTRAIN[sp.powertrain]}${matches(sp) ? "" : `<span class="mismatch"> · 감지한 동력계와 다름</span>`}</span>
+          </button>`).join("")}
+        <h3>주행 기록으로 알 수 없는 가혹 조건</h3>
+        <p class="mismatch">먼지, 험로, 영업용, 고속 주행, 한랭 지역(바깥 온도를 읽을 수 없음), 견인, 오일 종류는 차가 알려 주지 않아 직접 고릅니다.</p>
+        <div class="chips">
+          ${SEVERE.filter(([k]) => !AUTO_CONDITIONS.has(k)).map(([k, label]) => `<button class="chip" aria-pressed="${declared.has(k)}" data-act="toggle" data-args="${k}">${label}</button>`).join("")}
+        </div>
+      </div>
+      <footer><button class="text-btn" data-act="close-btn">닫기</button></footer>
+    </div>
+  </div>`;
+}
+
+document.addEventListener("click", (e) => {
+  const el = e.target.closest("[data-act]");
+  if (!el) return;
+  const act = el.dataset.act, args = el.dataset.args;
+  if (act === "close" && e.target !== el) return; // 대화상자 안쪽 클릭은 닫지 않는다
+  switch (act) {
+    case "accept": return actions.accept();
+    case "next": return actions.next();
+    case "snooze": return actions.snooze();
+    case "complete": return actions.complete(args.split(","));
+    case "navi": return actions.navi(args);
+    case "drive": return actions.drive(args);
+    case "warn": return actions.warn();
+    case "reset": return actions.reset();
+    case "voice": return actions.voice();
+    case "open": settingsOpen = true; return render();
+    case "close": case "close-btn": settingsOpen = false; return render();
+    case "spec": return actions.selectSpec(args);
+    case "toggle": return actions.toggle(args);
+    case "energy": return actions.energy(args);
+  }
+});
+document.addEventListener("submit", (e) => {
+  const form = e.target.closest("[data-form=say]");
+  if (!form) return;
+  e.preventDefault();
+  handleSay(form.querySelector("input").value);
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && settingsOpen) { settingsOpen = false; render(); }
+});
+
+start();
+</script>
+</body>
+</html>

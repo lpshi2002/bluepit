@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Vehicle: 누적 주행거리, 이번 주행 거리·시간 -->
+    <uses-permission android:name="pleos.car.permission.CAR_DRIVE" />
+    <uses-permission android:name="pleos.car.permission.CAR_SAFETY" />
+    <!-- Vehicle: 차대번호(연식) -->
+    <uses-permission android:name="pleos.car.permission.CAR_INFO" />
+    <!-- Vehicle: 연료 잔량·배터리 충전량(엔진차·전기차 판별) -->
+    <uses-permission android:name="pleos.car.permission.CAR_ENERGY" />
+    <!-- NaviHelper: 즐겨찾기 읽기(NAVI_ROUTE), 경로·경유지 요청(NAVI_ROUTE_SEARCH) -->
+    <uses-permission android:name="pleos.car.permission.NAVI_ROUTE" />
+    <uses-permission android:name="pleos.car.permission.NAVI_ROUTE_SEARCH" />
+
+    <application
+        android:allowBackup="false"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@android:style/Theme.Material.NoActionBar">
+        <uses-library android:name="android.car" android:required="false" />
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>

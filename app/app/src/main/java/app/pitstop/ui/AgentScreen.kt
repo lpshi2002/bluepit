@@ -58,12 +58,20 @@ private val AUTO_CONDITIONS = setOf(SevereCondition.SHORT_TRIPS, SevereCondition
 @Composable
 fun AgentScreen(vm: AgentViewModel) {
     val state = vm.state
+    val proposal = state.action as? AgentAction.Propose
+    val spoken = vm.question(state.action, proposal?.options?.getOrNull(state.optionIndex))
+    LaunchedEffect(spoken, vm.voiceEnabled, vm.canInteract, vm.ignitionCycle) {
+        if (vm.canInteract && vm.cancelRequest == null) vm.promptVoice(spoken)
+    }
     if (!vm.canInteract) {
+        LaunchedEffect(state.low, vm.delayed, vm.approachingHazard, vm.voiceEnabled) { vm.urgentVoice() }
         Surface(Modifier.fillMaxSize()) { Text("정차 후 정비 계획을 확인해 주세요.", Modifier.padding(32.dp), fontSize = 26.sp) }
         return
     }
     var cancel by remember { mutableStateOf<Booking?>(null) }
     var byShop by remember { mutableStateOf(false) }
+    var typing by remember { mutableStateOf(false) }
+    var reply by remember { mutableStateOf("") }
     var settingsOpen by remember { mutableStateOf(false) }
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Row(Modifier.fillMaxSize().padding(24.dp), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
@@ -76,14 +84,19 @@ fun AgentScreen(vm: AgentViewModel) {
                 else AgentCard(state, vm)
                 if (vm.undoBooking != null) Secondary("10초 안에 되돌리기", vm::undo)
                 state.items.mapNotNull { it.item.booking }.distinct().forEach { booking ->
-                    val shop = app.pitstop.agent.DemoData.shops.find { it.id == booking.shopId }
+                    val shop = vm.shopFor(booking.shopId)
                     Text("${shop?.name.orEmpty()} · ${booking.date.korean()} ${time(booking.hour, booking.minute)}")
+                    if (shop?.partner == false) {
+                        val work = state.items.filter { it.item.booking == booking }.joinToString(", ") { it.rule.name }
+                        Text("공식 전화 접수 080-600-6000 · ${shop.address} · $work")
+                    }
                     Buttons {
                         Secondary("예약 계획 취소") { byShop = false; cancel = booking }
                         Secondary("정비소가 취소했어요") { byShop = true; cancel = booking }
                     }
                 }
                 state.notice?.let { Text(it, fontSize = 20.sp, color = MaterialTheme.colorScheme.primary) }
+                if (vm.voiceStatus.isNotEmpty()) Text(vm.voiceStatus)
                 DrivingCard(state)
             }
             Column(
@@ -92,21 +105,40 @@ fun AgentScreen(vm: AgentViewModel) {
             ) {
                 Secondary("차량·주행 환경 설정") { settingsOpen = true }
                 Secondary(if (state.demo) "내 정비 기록으로 돌아가기" else "별도 시연 시작") { vm.switchDemo(!state.demo) }
+                Buttons {
+                    Secondary(if (vm.voiceEnabled) "음성 대화 끄기" else "음성 대화 켜기", vm::toggleVoice)
+                    if (vm.voiceEnabled && spoken != null) Secondary("다시 말로 묻기") { vm.promptVoice(spoken, manual = true) }
+                    if (state.demo) Secondary("글자로 답하기") { typing = true }
+                }
                 if (state.demo) DemoControls(vm)
                 ItemList(state)
             }
         }
     }
+    LaunchedEffect(typing, settingsOpen, cancel) {
+        if (typing || settingsOpen || cancel != null) vm.stopConversation()
+    }
+    if (typing) AlertDialog(onDismissRequest = { typing = false }, title = { Text("시연 · 글자로 답하기") },
+        text = { androidx.compose.material3.OutlinedTextField(reply, { reply = it }, singleLine = true,
+            label = { Text("예약해줘, 다른 시간, 나중에") }) },
+        confirmButton = { Primary("답하기") { typing = false; vm.handleCommand(reply); reply = "" } })
+    vm.cancelRequest?.let { b ->
+        AlertDialog(onDismissRequest = vm::dismissCancellation, title = { Text("취소할 계획 확인") },
+            text = { Text("${vm.shopFor(b.shopId)?.name} · ${b.date.korean()} ${time(b.hour, b.minute)}") },
+            confirmButton = { Primary("취소 확정") { vm.handleCommand("취소 확정") } },
+            dismissButton = { Secondary("유지", vm::dismissCancellation) })
+    }
     vm.pending?.let { option ->
         val action = state.action as? AgentAction.Propose
         val names = action?.let { (listOf(it.rule) + it.together).joinToString(", ") { r -> "${r.name} ${r.action.verb}" } }
         AlertDialog(onDismissRequest = vm::dismissSummary, title = { Text("이 계획을 확정할까요?") },
-            text = { Text("${option.shop.name} · ${option.date.korean()} ${time(option.hour, option.minute)} · $names") },
+            text = { Text("${option.shop.name} · ${option.date.korean()} ${time(option.hour, option.minute)} · $names" +
+                if (option.shop.partner) "\n제휴 시연 · ${state.spec?.label}, 항목과 희망 시간을 확인해 주세요. 외부 전송은 없습니다." else "") },
             confirmButton = { Primary("확정", vm::confirm) },
             dismissButton = { Secondary("돌아가기", vm::dismissSummary) })
     }
     cancel?.let { booking ->
-        val shop = app.pitstop.agent.DemoData.shops.find { it.id == booking.shopId }
+        val shop = vm.shopFor(booking.shopId)
         AlertDialog(onDismissRequest = { cancel = null }, title = { Text(if (byShop) "이 정비소를 제외하고 다시 찾을까요?" else "예약 계획을 취소할까요?") },
             text = { Text("${shop?.name} · ${booking.date.korean()} ${time(booking.hour, booking.minute)}") },
             confirmButton = { Primary("취소 확정") { vm.cancel(booking, byShop = byShop); cancel = null } },
@@ -157,7 +189,7 @@ private fun Header(state: UiState) {
         val km = state.currentKm?.let { "%,.0f km".format(it) } ?: "읽는 중"
         val kmSource = if (state.demo) "시연 기록" else if (state.kmFromVehicle) "차량 SDK" else "가상 값"
         val daily = "%.0f km".format(state.dailyKm) + if (state.usingDefaultDailyKm) " (기록 부족, 기본값)" else ""
-        val places = if (state.placesFromNavi) "내비 즐겨찾기" else "샘플 장소"
+        val places = if (state.demo) "샘플 장소" else if (state.placesFromNavi) "내비 즐겨찾기" else "내비에 집·회사 등록 필요"
         Text("주행거리 $km ($kmSource) · 하루 평균 $daily · 집·회사: $places", fontSize = 18.sp)
         val spec = state.spec?.let { "${it.label} (${it.manual} 취급설명서 기준)" } ?: "차종 확인 중"
         val detected = state.vehicle.energy?.label ?: "확인 중"
@@ -216,7 +248,7 @@ private fun AgentCard(state: UiState, vm: AgentViewModel) {
                 is AgentAction.TooLate -> {
                     Title("${action.rule.name} ${action.rule.action.verb}가 급해요")
                     Body(
-                        "예상일 ${action.dueDate.korean()}이 앱 예약 가능 기간(3일 뒤부터)보다 빨라요. " +
+                        "예상일 ${action.dueDate.korean()}까지 생활 동선에 맞는 후보가 없어요. " +
                             "블루핸즈 전화 예약(080-600-6000)으로 가장 빠른 날을 잡아 보세요."
                     )
                     Buttons {
@@ -258,7 +290,7 @@ private fun Reason(normal: String, applied: AppliedInterval) {
                 "적용 주기는 ${applied.interval.describe()}이에요. 통상 조건은 $normal"
         AppliedInterval.Basis.WARNING -> "정기 교체 예정일과 관계없이 양을 확인해 주세요."
         AppliedInterval.Basis.NONE -> "통상 조건에서 정해진 주기가 없어요."
-        AppliedInterval.Basis.ADJUSTED -> "최근 주행의 가혹도에 따라 $normal 에서 ${applied.interval.describe()}로 앞당겼어요."
+        AppliedInterval.Basis.ADJUSTED -> "최근 주행 가혹도 %.2f에 따라".format(applied.hci) + " $normal 에서 ${applied.interval.describe()}로 앞당겼어요."
         AppliedInterval.Basis.FIRST -> "아직 교체 기록이 없어 최초 주기 ${applied.interval.describe()}를 써요."
         AppliedInterval.Basis.NORMAL -> "통상 조건 주기 ${applied.interval.describe()}"
     }
@@ -283,9 +315,12 @@ private fun Question(option: BookingOption, reschedule: Boolean) {
 @Composable
 private fun DrivingCard(state: UiState) {
     val profile = state.profile ?: return
+    var detail by remember { mutableStateOf(false) }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("최근 30일 주행 패턴", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            TextButton({ detail = !detail }) { Text(if (detail) "근거 접기" else "판단 기준과 출처") }
+            if (detail) Text("차량 주행거리 8 km 미만 · 내비 정체 비율 50% 이상(없으면 평균 20 km/h 미만) · 브레이크 분당 1.5회 이상 · 내비 급경사 내리막 통과. 최근 30일, 조건별 10회 이상에서 점수 0.5 이상을 적용해요. ${state.spec?.manual.orEmpty()} 취급설명서 기준입니다.")
             val shortShare = profile.shortTripShare
             if (shortShare == null) {
                 Text(
@@ -344,12 +379,30 @@ private fun ItemList(state: UiState) {
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun SettingsDialog(state: UiState, vm: AgentViewModel, onClose: () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val askNotification = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission(), vm::startupNotifications)
+    var erase by remember { mutableStateOf(false) }
+    if (erase) {
+        AlertDialog(onDismissRequest = { erase = false }, title = { Text("모든 정비·주행 기록을 지울까요?") },
+            text = { Text("내 기록과 시연 기록, 앱에 저장한 예약 계획을 지웁니다.") },
+            confirmButton = { Primary("기록 삭제") { vm.eraseHistory(); onClose() } },
+            dismissButton = { Secondary("유지") { erase = false } })
+        return
+    }
     AlertDialog(
         onDismissRequest = onClose,
         confirmButton = { TextButton(onClose) { Text("닫기", fontSize = 20.sp) } },
         title = { Text("차량·주행 환경", fontSize = 26.sp) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Secondary(if (vm.startupEnabled) "부팅 후 정비 알림 끄기" else "부팅 후 정비 알림 켜기") {
+                    if (vm.startupEnabled) vm.startupNotifications(false)
+                    else if (context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED)
+                        vm.startupNotifications(true)
+                    else askNotification.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                }
+                Secondary("정비·주행 기록 삭제") { erase = true }
                 Text("차종 (현대차 취급설명서 정기 점검표 기준)", fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 ScheduleCatalog.specs.forEach { spec ->
                     Row(
@@ -380,6 +433,7 @@ private fun SettingsDialog(state: UiState, vm: AgentViewModel, onClose: () -> Un
 private fun DemoControls(vm: AgentViewModel) {
     Text("시연 조작 · 가상 데이터", fontSize = 22.sp, fontWeight = FontWeight.Bold)
     Buttons {
+        Secondary("아이오닉 5 산길 주행", vm::demoMountain)
         Secondary("시동 걸 때 제안", vm::demoIgnition)
         Secondary(if (vm.state.partnerDemo) "제휴 가정 끄기" else "제휴 가정 켜기", vm::togglePartner)
         Secondary(if (vm.state.low) "부족 신호 해제" else "오일 양 부족 신호", vm::demoWarning)

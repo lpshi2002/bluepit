@@ -6,6 +6,8 @@ import ai.pleos.playground.vehicle.listener.DrivingTimeListener
 import ai.pleos.playground.vehicle.listener.BrakePedalStatusListener
 import ai.pleos.playground.vehicle.listener.OilLevelStateListener
 import ai.pleos.playground.vehicle.constant.control.OilLevelState
+import ai.pleos.playground.vehicle.listener.TurnSignalStateListener
+import ai.pleos.playground.vehicle.constant.area.TurnSignalValue
 import android.content.Context
 
 /**
@@ -23,6 +25,7 @@ class VehicleSource(context: Context, private val listener: Listener) {
         fun onOdometerUnavailable(e: Exception)
         fun onTripMeters(meters: Double)
         fun onTripMinutes(minutes: Int)
+        fun onIndicator(active: Boolean)
         fun onBrake(pressed: Boolean?)
         fun onFluid(ev: Boolean, low: Boolean)
         fun onVin(vin: String)
@@ -57,6 +60,10 @@ class VehicleSource(context: Context, private val listener: Listener) {
         override fun onFailed(e: Exception) = listener.onError(e)
     }
 
+    private val indicator = object : TurnSignalStateListener {
+        override fun onTurnSignalStateUpdated(state: TurnSignalValue?) = listener.onIndicator(state != TurnSignalValue.OFF)
+        override fun onFailed(e: Exception) = listener.onError(e)
+    }
     private val pedal = object : BrakePedalStatusListener {
         private var received = false
         override fun onBrakePedalStatusUpdated(status: Boolean?) {
@@ -93,6 +100,7 @@ class VehicleSource(context: Context, private val listener: Listener) {
             odometer.registerTripCurrentDrivingTime(tripTimeListener)
         }
         auxiliary { vehicle.getCarInfo().getVINInfo(onComplete = { vin -> vin?.let(listener::onVin) }, onFailed = listener::onError) }
+        auxiliary { vehicle.getTurnSignal().registerTurnSignalState(indicator) }
         auxiliary { vehicle.getBrake().registerBrakePedalStatus(pedal) }
         auxiliary { vehicle.getSafety().getEngineOilLevelState(oil::onOilLevelUpdated, listener::onError) }
         auxiliary { vehicle.getSafety().getBrakeFluidLevelState(brakeFluid::onOilLevelUpdated, listener::onError) }
@@ -136,6 +144,7 @@ class VehicleSource(context: Context, private val listener: Listener) {
 
     fun stop() {
         if (!started) return
+        auxiliary { vehicle.getTurnSignal().unregisterTurnSignalState(indicator) }
         auxiliary { vehicle.getBrake().unregisterBrakePedalStatus(pedal) }
         auxiliary { vehicle.getSafety().unregisterEngineOilLevelState(oil) }
         auxiliary { vehicle.getSafety().unregisterBrakeFluidLevelState(brakeFluid) }

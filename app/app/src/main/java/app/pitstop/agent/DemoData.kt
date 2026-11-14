@@ -78,6 +78,6 @@ class DemoBookingService : BookingService {
         date = option.date,
         hour = option.hour,
         minute = option.minute,
-        confirmation = "PLAN-${java.util.UUID.randomUUID()}",
+        confirmation = (if (option.shop.partner) "DEMO-" else "PLAN-") + "${java.util.UUID.randomUUID()}",
     )
 }

@@ -47,7 +47,8 @@ class AgentStore(context: Context, private val key: String = "state-v2") {
             },
             trips = json.getJSONArray("trips").objects().map {
                 Trip(LocalDate.parse(it.getString("date")), it.getDouble("km"), it.getInt("minutes"),
-                    it.optDouble("brakes").takeIf(Double::isFinite), it.optDouble("congestion").takeIf(Double::isFinite))
+                    it.optDouble("brakes").takeIf(Double::isFinite), it.optDouble("congestion").takeIf(Double::isFinite),
+                    if (it.has("downhill")) it.getBoolean("downhill") else null)
             },
             declared = json.getJSONArray("declared").let { array ->
                 (0 until array.length()).mapNotNull { i -> SevereCondition.entries.firstOrNull { it.name == array.getString(i) } }.toSet()
@@ -66,7 +67,7 @@ class AgentStore(context: Context, private val key: String = "state-v2") {
             .put("samples", JSONArray(saved.samples.map { JSONObject().put("date", it.date.toString()).put("km", it.km) }))
             .put("trips", JSONArray(saved.trips.map {
                 JSONObject().put("date", it.date.toString()).put("km", it.km).put("minutes", it.minutes)
-                    .put("brakes", it.brakesPerMinute).put("congestion", it.congestion)
+                    .put("downhill", it.downhill).put("brakes", it.brakesPerMinute).put("congestion", it.congestion)
             }))
             .put("declared", JSONArray(saved.declared.map { it.name }))
             .put("demoDayOffset", saved.demoDayOffset)

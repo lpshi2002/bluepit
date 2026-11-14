@@ -14,8 +14,8 @@ android {
         // NaviHelper 공식 샘플과 같은 값. 공모전 조건(28 이상)을 만족한다.
         minSdk = 33
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
     }
 
     buildTypes {
@@ -39,6 +39,14 @@ android {
 }
 
 dependencies {
+    implementation("ai.pleos.playground:SpeechToText:3.3.1") {
+        // ON_DEVICE mode uses no server registration or Universal Access credentials.
+        exclude(group = "ai.pleos.playground.security", module = "universal-access")
+    }
+    implementation("ai.pleos.playground:TextToSpeech:3.3.1") {
+        // ON_DEVICE mode uses no server registration or Universal Access credentials.
+        exclude(group = "ai.pleos.playground.security", module = "universal-access")
+    }
     implementation(libs.vehicle.sdk)
     implementation(libs.navi.helper.sdk)
 

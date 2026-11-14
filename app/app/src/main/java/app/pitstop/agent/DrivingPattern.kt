@@ -3,7 +3,7 @@ package app.pitstop.agent
 import java.time.LocalDate
 
 /** 시동을 켜고 끈 한 번의 주행. */
-data class Trip(val date: LocalDate, val km: Double, val minutes: Int, val brakesPerMinute: Double? = null, val congestion: Double? = null) {
+data class Trip(val date: LocalDate, val km: Double, val minutes: Int, val brakesPerMinute: Double? = null, val congestion: Double? = null, val downhill: Boolean? = null) {
     /** 평균 속도(km/h). 시간이 0분이면 알 수 없다. */
     val averageKmh: Double? get() = if (minutes > 0) km / (minutes / 60.0) else null
 }
@@ -42,6 +42,7 @@ object DrivingAnalyzer {
             }
         }
         val scores = buildMap {
+            score { it.downhill }?.let { put(SevereCondition.MOUNTAIN, it) }
             score { it.km < SHORT_TRIP_KM }?.let { put(SevereCondition.SHORT_TRIPS, it) }
             score { trip -> trip.congestion?.let { it >= 0.5 } ?: trip.averageKmh?.let { it < SLOW_TRIP_KMH } }
                 ?.let { put(SevereCondition.CONGESTION, it) }
@@ -86,6 +87,14 @@ class TripTracker {
         previousPedal = pressed
     }
 
+    private var downhill: Boolean? = null
+    private var congestion: Double? = null
+
+    fun onGuidance(downhillPassed: Boolean?, congestionShare: Double?) {
+        if (downhillPassed != null) downhill = downhill == true || downhillPassed
+        if (congestionShare != null) congestion = congestionShare.coerceIn(0.0, 1.0)
+    }
+
     fun onMinutes(value: Int) {
         if (value < minutes) {
             if (timeResetPending) timeResetPending = false else finishedMinutes = minutes
@@ -100,7 +109,9 @@ class TripTracker {
         if (newKm + RESET_TOLERANCE_KM < km) {
             val duration = finishedMinutes ?: minutes
             val rate = if (observedBrake && duration > 0) brakeCount.toDouble() / duration else null
-            if (km >= MIN_TRIP_KM) finished = Trip(date, km, duration, rate)
+            if (km >= MIN_TRIP_KM) finished = Trip(date, km, duration, rate, congestion, downhill)
+            congestion = null
+            downhill = null
             brakeCount = 0
             observedBrake = false
             timeResetPending = finishedMinutes == null

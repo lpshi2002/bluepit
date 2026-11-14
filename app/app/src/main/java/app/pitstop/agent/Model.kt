@@ -39,7 +39,8 @@ enum class PlaceKind { HOME, OFFICE }
 
 data class Place(val kind: PlaceKind, val name: String, val lat: Double, val lon: Double)
 
-data class Shop(val id: String, val name: String, val address: String, val lat: Double, val lon: Double, val partner: Boolean = false)
+data class Shop(val id: String, val name: String, val address: String, val lat: Double, val lon: Double, val partner: Boolean = false,
+    val opening: Int = 0, val closing: Int = 24 * 60)
 
 /** 사용자가 정비소에 갈 수 있는 시간대. 예: 토요일 10시, 집 근처. */
 data class Availability(val days: Set<DayOfWeek>, val hour: Int, val near: PlaceKind, val minute: Int = 0, val code: String = "", val label: String = "")
@@ -62,7 +63,7 @@ data class Situation(
 )
 
 /** 지금 적용하는 주기와 그 이유. */
-data class AppliedInterval(val interval: Interval, val basis: Basis, val because: Set<SevereCondition>) {
+data class AppliedInterval(val interval: Interval, val basis: Basis, val because: Set<SevereCondition>, val hci: Double? = null) {
     enum class Basis(val label: String) { WARNING("양 부족 신호"), NONE("정기 교체 없음"), ADJUSTED("조정됨"), FIRST("최초 주기"), NORMAL("통상 조건"), SEVERE("가혹 조건") }
 }
 

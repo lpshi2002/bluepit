@@ -57,7 +57,7 @@ object Planner {
                 0.15 * (scores[SevereCondition.STOP_AND_GO] ?: 0.0)
             val normal = rule.normal.km!!
             val km = ((normal - (normal - rule.severe!!.km!!) * hci.pow(1.15)) / 100).roundToInt() * 100
-            if (km < normal) return AppliedInterval(rule.normal.copy(km = km), AppliedInterval.Basis.ADJUSTED, emptySet())
+            if (km < normal) return AppliedInterval(rule.normal.copy(km = km), AppliedInterval.Basis.ADJUSTED, emptySet(), hci)
         }
         return AppliedInterval(rule.normal, AppliedInterval.Basis.NORMAL, emptySet())
     }
@@ -102,6 +102,7 @@ object Planner {
             for (slot in situation.availability.filter { date.dayOfWeek in it.days }) {
                 val place = (if (slot.near == PlaceKind.HOME) home else office) ?: continue
                 for (shop in situation.shops) {
+                    if (slot.hour * 60 + slot.minute !in shop.opening until shop.closing) continue
                     if (shop.partner) {
                         if (!situation.partnerDemo || (date == today && slot.code != "A")) continue
                         val key = "${shop.id}|${date.toEpochDay()}|${slot.code}"
@@ -177,7 +178,9 @@ object Planner {
             }
 
         all.firstOrNull { it.applied.basis == AppliedInterval.Basis.WARNING && it.item.booking == null && awake(it) }?.let {
-            return propose(it, situation, false, emptyList())
+            val companions = all.filter { row -> row !== it && row.item.booking == null && awake(row) &&
+                row.dueDate?.isAfter(today.plusDays(TOGETHER_DAYS)) == false }
+            return propose(it, situation, false, companions)
         }
 
         all.filter { s -> s.applied.basis != AppliedInterval.Basis.WARNING && !s.item.baselineCheck && s.item.booking != null && awake(s) && s.dueDate?.isBefore(s.item.booking.date) == true }
@@ -192,7 +195,7 @@ object Planner {
             ?.let { soon ->
                 val togetherUntil = soon.dueDate!!.plusDays(TOGETHER_DAYS)
                 val together = all.filter { s ->
-                    s !== soon && s.item.booking == null && s.dueDate?.isAfter(togetherUntil) == false
+                    s !== soon && s.item.booking == null && awake(s) && s.dueDate?.isAfter(togetherUntil) == false
                 }
                 return propose(soon, situation, reschedule = false, together = together)
             }

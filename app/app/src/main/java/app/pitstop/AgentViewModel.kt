@@ -32,6 +32,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
+import app.pitstop.voice.PleosVoice
+import app.pitstop.voice.VoiceCommand
+import app.pitstop.voice.voiceCommand
 import java.time.LocalDate
 
 /** 차량·내비 데이터를 모아 Planner에 넘기고, 사용자의 답을 상태에 반영한다. */
@@ -72,6 +75,19 @@ class AgentViewModel(app: Application) : AndroidViewModel(app) {
         val low: Boolean,
     )
 
+    private val publicShops = org.json.JSONArray(app.assets.open("shops.json").bufferedReader().use { it.readText() }).let { array ->
+        fun minutes(value: String, fallback: Int) = runCatching {
+            java.time.LocalTime.parse(value).toSecondOfDay() / 60
+        }.getOrDefault(fallback)
+        (0 until array.length()).map { i ->
+            val row = array.getJSONArray(i)
+            Shop(row.getString(0), row.getString(1), row.getString(2), row.getDouble(3), row.getDouble(4),
+                opening = minutes(row.optString(5), 0), closing = minutes(row.optString(6), 18 * 60))
+        }
+    }
+
+    fun shopFor(id: String) = (publicShops + DemoData.shops).find { it.id == id }
+
     private val realStore = AgentStore(app, "history-v3")
     private val demoStore = AgentStore(app, "demo-v1")
     private val mode = app.getSharedPreferences("pitstop-mode", 0)
@@ -85,7 +101,7 @@ class AgentViewModel(app: Application) : AndroidViewModel(app) {
     private var store = if (mode.getBoolean("demo", false)) demoStore else realStore
     private val bookingService: BookingService = DemoBookingService()
     private val main = Handler(Looper.getMainLooper())
-    private val tripTracker = TripTracker()
+    private var tripTracker = TripTracker()
 
     private var saved = store.load()
     private val lowFluids = mutableSetOf<Boolean>()
@@ -98,11 +114,32 @@ class AgentViewModel(app: Application) : AndroidViewModel(app) {
     var undoBooking by mutableStateOf<Booking?>(null)
         private set
     private var undoDeadline = 0L
+    private var foreground = false
+    private var skipRepeatedQuestion = false
+    private var hazard by mutableStateOf(false)
+    private var indicator by mutableStateOf(true)
+    var voiceEnabled by mutableStateOf(mode.getBoolean("voice", false))
+        private set
+    var voiceStatus by mutableStateOf("")
+        private set
+    private val voice = PleosVoice(app) { voiceStatus = it }
+    var ignitionCycle by mutableStateOf(0)
+        private set
+    fun onIgnition() {
+        urgentSpoken = false
+        checkedBooking = null
+        ignitionCycle++
+        start()
+    }
+    fun stopConversation() { voice.stop(); voiceStatus = "" }
+    private var urgentSpoken = false
     private var pendingDeadline = 0L
 
     fun allowInteraction(allowed: Boolean) {
+        if (canInteract != allowed) voice.stop()
         canInteract = allowed
-        if (!allowed) { pending = null; checkedBooking = null }
+        if (allowed) urgentSpoken = false
+        if (!allowed) { pending = null; cancelRequest = null; checkedBooking = null }
     }
     private var baseKm: Double? = null
     private var kmFromVehicle = false
@@ -121,6 +158,10 @@ class AgentViewModel(app: Application) : AndroidViewModel(app) {
     private val vehicleSource = VehicleSource(app, object : VehicleSource.Listener {
         override fun onOdometerKm(km: Double) = post { onBaseKm(km, fromVehicle = true) }
 
+        override fun onIndicator(active: Boolean) = post {
+            indicator = active
+            if (active && !canInteract) voice.stop()
+        }
         override fun onBrake(pressed: Boolean?) = post { tripTracker.onBrake(pressed) }
         override fun onFluid(ev: Boolean, low: Boolean) = post {
             val changed = if (low) lowFluids.add(ev) else lowFluids.remove(ev)
@@ -176,9 +217,11 @@ class AgentViewModel(app: Application) : AndroidViewModel(app) {
             val delay = java.time.Duration.between(booking.date.atTime(booking.hour, booking.minute), eta).toMinutes()
             showDelay(booking, delay)
         }
-    } }, { code -> post { notice = "내비 응답: $code. 내비에서 경로를 확인해 주세요."; refresh() } }) { places -> post { naviPlaces = places; refresh() } }
+    } }, { code -> post { notice = "내비 응답: $code. 내비에서 경로를 확인해 주세요."; refresh() } }, { downhill, congestion -> post { tripTracker.onGuidance(downhill, congestion) } },
+        { nearby -> post { hazard = nearby; if (nearby && !canInteract) voice.stop() } }) { places -> post { naviPlaces = places; refresh() } }
 
     init {
+        voice.initialize()
         vehicleConnected = vehicleSource.start()
         if (!vehicleConnected && baseKm == null) onBaseKm(DemoData.FALLBACK_ODOMETER_KM, fromVehicle = false)
         // 동력계 응답이 오지 않으면 기본 차종으로 시작한다.
@@ -264,17 +307,149 @@ class AgentViewModel(app: Application) : AndroidViewModel(app) {
         refresh()
     }
 
+    fun foreground(active: Boolean) {
+        foreground = active
+        if (!active) {
+            voice.stop()
+            dismissSummary()
+        }
+    }
+
+    var startupEnabled by mutableStateOf(mode.getBoolean("startup", false))
+        private set
+    fun startupNotifications(enabled: Boolean) {
+        startupEnabled = enabled
+        mode.edit().putBoolean("startup", enabled).apply()
+    }
+
+    fun toggleVoice() {
+        if (!canInteract) return
+        voiceEnabled = !voiceEnabled
+        mode.edit().putBoolean("voice", voiceEnabled).apply()
+        skipRepeatedQuestion = false
+        if (!voiceEnabled) { voice.stop(); voiceStatus = "" }
+    }
+
+    val approachingHazard get() = indicator || hazard
+
+    fun question(action: AgentAction?, option: BookingOption?): String? = when {
+        pending != null -> {
+            val p = pending!!
+            val names = (action as? AgentAction.Propose)?.let { (listOf(it.rule) + it.together).joinToString(", ") { r -> r.name + " " + r.action.verb } }
+            "${p.shop.name}, ${p.date.monthValue}월 ${p.date.dayOfMonth}일 ${p.hour}시 ${p.minute}분, ${names.orEmpty()}. 맞으면 확정이라고 말해 주세요."
+        }
+        undoBooking != null -> "계획을 저장했어요. 되돌리려면 취소라고 말해 주세요."
+        action is AgentAction.Propose && option != null -> {
+            val whenDue = if (action.applied.basis == AppliedInterval.Basis.WARNING) "부족 신호가 있어요" else
+                "예정일까지 ${java.time.temporal.ChronoUnit.DAYS.between(today, action.dueDate)}일 남았어요"
+            "${action.rule.name} $whenDue. ${option.date.monthValue}월 ${option.date.dayOfMonth}일 ${option.hour}시 ${option.minute}분에 ${option.shop.name}에 들를까요?"
+        }
+        action is AgentAction.VisitDay -> "정비 계획이 있어요. ${action.shop?.name.orEmpty()}로 길 안내를 시작할까요?"
+        action is AgentAction.TooLate -> "${action.rule.name} 점검이 필요해요. 공식 전화 예약을 확인해 주세요."
+        else -> null
+    }
+
+    fun promptVoice(text: String?, retry: Boolean = false, manual: Boolean = false) {
+        if (!foreground || !voiceEnabled || !canInteract || text == null) return
+        if (manual) skipRepeatedQuestion = false
+        if (skipRepeatedQuestion && pending == null && cancelRequest == null) {
+            skipRepeatedQuestion = false
+            return
+        }
+        val option = pending
+        val cancellation = cancelRequest
+        val promptKey = question(state.action, (state.action as? AgentAction.Propose)?.options?.getOrNull(state.optionIndex))
+        if (option != null) armConfirmation(30000)
+        if (cancellation != null) armCancellation(cancellation, 30000)
+        voice.ask(text, onListening = {
+            if (option != null && pending == option) armConfirmation(8000)
+            if (cancellation != null && cancelRequest == cancellation) armCancellation(cancellation, 8000)
+        }) { reply ->
+            if (!foreground || !canInteract || !voiceEnabled || pending != option || cancelRequest != cancellation ||
+                question(state.action, (state.action as? AgentAction.Propose)?.options?.getOrNull(state.optionIndex)) != promptKey) return@ask
+            if (voiceCommand(reply) == VoiceCommand.UNKNOWN && !retry && option == null)
+                promptVoice("다시 한 번 말씀해 주세요. $text", retry = true)
+            else handleCommand(reply)
+        }
+    }
+
+    fun urgentVoice() {
+        if (!foreground || !voiceEnabled || canInteract || urgentSpoken || approachingHazard) return
+        val prompt = when {
+            state.low -> "차량에서 액량 부족 신호가 왔어요. 정차한 뒤 점검 계획을 확인할까요?"
+            delayed != null -> "정비소 도착이 늦어져요. 정차한 뒤 다른 시간을 확인할까요?"
+            else -> return
+        }
+        urgentSpoken = true
+        voice.ask(prompt) {
+            // No screen change or booking while the car is moving.
+            if (voiceCommand(it) == VoiceCommand.ACCEPT) notice = "정차 후 정비 계획을 확인해 주세요."
+        }
+    }
+
+    private var cancelDeadline = 0L
+    private fun armCancellation(booking: Booking, ms: Long) {
+        val expires = android.os.SystemClock.elapsedRealtime() + ms
+        cancelDeadline = expires
+        main.postDelayed({ if (cancelDeadline == expires && cancelRequest == booking) cancelRequest = null }, ms)
+    }
+    var cancelRequest by mutableStateOf<Booking?>(null)
+        private set
+    private var shopCancellation = false
+    fun dismissCancellation() { cancelRequest = null; voice.stop() }
+
+    fun handleCommand(text: String) {
+        if (!canInteract) return
+        val cmd = voiceCommand(text)
+        val visit = state.action as? AgentAction.VisitDay
+        val proposal = state.action as? AgentAction.Propose
+        val toCancel = cancelRequest
+        voiceStatus = ""
+        when {
+            toCancel != null -> {
+                cancelRequest = null
+                if (cmd == VoiceCommand.CONFIRM_CANCEL) cancel(toCancel, byShop = shopCancellation)
+            }
+            pending != null -> if (cmd == VoiceCommand.CONFIRM) confirm() else dismissSummary()
+            cmd == VoiceCommand.CANCEL && undoBooking != null -> undo()
+            cmd == VoiceCommand.CANCEL || cmd == VoiceCommand.SHOP_CANCEL -> {
+                val booking = visit?.booking ?: state.items.mapNotNull { it.item.booking }.distinct().singleOrNull()
+                if (booking == null) { voiceStatus = "취소할 계획을 화면에서 선택해 주세요."; return }
+                cancelRequest = booking
+                shopCancellation = cmd == VoiceCommand.SHOP_CANCEL
+                promptVoice("${shopFor(booking.shopId)?.name.orEmpty()}, ${booking.date.monthValue}월 ${booking.date.dayOfMonth}일 ${booking.hour}시 ${booking.minute}분 계획이에요. 취소하려면 취소 확정이라고 말해 주세요.")
+                if (!voiceEnabled) armCancellation(booking, 8000)
+            }
+            cmd == VoiceCommand.ACCEPT && proposal != null -> accept()
+            cmd == VoiceCommand.NEXT && proposal != null -> if (state.optionIndex < proposal.options.lastIndex) nextOption() else snooze()
+            cmd == VoiceCommand.NEXT && visit != null && delayed?.first == visit.booking -> moveLater(visit.booking)
+            cmd == VoiceCommand.LATER -> snooze()
+            visit != null && cmd in setOf(VoiceCommand.ACCEPT, VoiceCommand.ROUTE) -> visit.shop?.let(::routeTo)
+            visit != null && cmd == VoiceCommand.WAYPOINT -> visit.shop?.let(::addWaypoint)
+            visit != null && cmd == VoiceCommand.DONE -> complete(visit.rules)
+            else -> voiceStatus = "정차 후 화면에서 원하는 항목을 선택해 주세요."
+        }
+    }
+
     fun accept() {
         if (!canInteract) return
         val action = state.action as? AgentAction.Propose ?: return
         pending = action.options.getOrNull(state.optionIndex) ?: return
         pendingRules = (listOf(action.rule) + action.together).map { it.id }.toSet()
-        pendingDeadline = android.os.SystemClock.elapsedRealtime() + 8000
-        val expires = pendingDeadline
-        main.postDelayed({ if (pendingDeadline == expires) pending = null }, 8000)
+        armConfirmation(8000)
     }
 
-    fun dismissSummary() { pending = null }
+    private fun armConfirmation(ms: Long) {
+        pendingDeadline = android.os.SystemClock.elapsedRealtime() + ms
+        val expires = pendingDeadline
+        main.postDelayed({ if (pendingDeadline == expires && pending != null) {
+            skipRepeatedQuestion = true
+            pending = null
+            voice.stop()
+        } }, ms)
+    }
+
+    fun dismissSummary() { if (pending != null) skipRepeatedQuestion = true; pending = null }
 
     fun confirm() {
         val option = pending ?: return
@@ -310,7 +485,7 @@ class AgentViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun removeWaypoint(booking: Booking) {
-        val shop = DemoData.shops.firstOrNull { it.id == booking.shopId } ?: return
+        val shop = shopFor(booking.shopId) ?: return
         navi.removeMatchingWaypoint(shop) { message -> post { notice = message; refresh() } }
     }
 
@@ -413,6 +588,9 @@ class AgentViewModel(app: Application) : AndroidViewModel(app) {
     /** 시연 기록만 지운다. 고른 차종과 직접 알려 준 주행 환경은 남긴다. */
     fun switchDemo(enable: Boolean) {
         if (!canInteract) return
+        voice.stop()
+        tripTracker = TripTracker()
+        cancelRequest = null
         pending = null
         undoBooking = null
         store = if (enable) demoStore else realStore
@@ -453,6 +631,34 @@ class AgentViewModel(app: Application) : AndroidViewModel(app) {
         if (saved.demo) { saved = saved.copy(partnerDemo = !saved.partnerDemo); refresh() }
     }
 
+    fun demoMountain() {
+        if (!canInteract || !saved.demo) return
+        demoReset()
+        selectSpec(DemoData.DEFAULT_EV_SPEC)
+        val date = today
+        saved = saved.copy(trips = List(10) { app.pitstop.agent.Trip(date.minusDays((9L-it)/2), 60.0, 80, 1.0, 0.1, true) })
+        notice = "아이오닉 5 · 내리막 주의 구간을 지난 가상 주행 10회"
+        refresh()
+    }
+
+    fun eraseHistory() {
+        if (!canInteract) return
+        voice.stop()
+        getApplication<Application>().getSharedPreferences("pitstop", 0).edit().clear().apply()
+        store = realStore
+        mode.edit().putBoolean("demo", false).apply()
+        saved = AgentStore.Saved(specId = spec?.id)
+        undoItems = emptyList()
+        pending = null
+        undoBooking = null
+        delayed = null
+        timingBooking = null
+        checkedBooking = null
+        tripTracker = TripTracker()
+        notice = "주행 기록과 정비 기록을 지웠어요."
+        start()
+    }
+
     fun demoWarning() {
         if (saved.demo) { saved = saved.copy(demoLow = !saved.demoLow); refresh() }
     }
@@ -474,11 +680,12 @@ class AgentViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun refresh() {
+        saved = saved.copy(trips = saved.trips.filter { it.date in today.minusDays(30)..today })
         store.save(saved)
         state = buildState()
     }
 
-    private fun places() = DemoData.fallbackPlaces.map { fallback -> naviPlaces.firstOrNull { it.kind == fallback.kind } ?: fallback }
+    private fun places() = if (saved.demo) DemoData.fallbackPlaces else naviPlaces
 
     private fun buildState(): UiState {
         val km = currentKm
@@ -489,7 +696,7 @@ class AgentViewModel(app: Application) : AndroidViewModel(app) {
         val conditions = profile?.detected.orEmpty() + saved.declared
         val low = if (saved.demo) saved.demoLow else (spec?.powertrain == Powertrain.EV) in lowFluids
         val situation = if (km != null && spec != null && saved.setupDone) {
-            Situation(today, km, saved.samples, spec, saved.items, conditions, places(), DemoData.shops, DemoData.availability, profile?.scores.orEmpty(), saved.partnerDemo, low)
+            Situation(today, km, saved.samples, spec, saved.items, conditions, places(), if (saved.demo) DemoData.shops else publicShops, DemoData.availability, profile?.scores.orEmpty(), saved.partnerDemo, low)
         } else {
             null
         }
@@ -527,6 +734,7 @@ class AgentViewModel(app: Application) : AndroidViewModel(app) {
 
     override fun onCleared() {
         main.removeCallbacksAndMessages(null)
+        voice.close()
         vehicleSource.stop()
         navi.stop()
     }
@@ -541,7 +749,7 @@ class AgentViewModel(app: Application) : AndroidViewModel(app) {
     private companion object {
         const val TAG = "Pitstop"
         const val SNOOZE_DAYS = 3L
-        const val SAMPLE_KEEP_DAYS = 60L
+        const val SAMPLE_KEEP_DAYS = 31L
         const val TRIP_KEEP_COUNT = 300
         const val ENERGY_TIMEOUT_MS = 3_000L
     }

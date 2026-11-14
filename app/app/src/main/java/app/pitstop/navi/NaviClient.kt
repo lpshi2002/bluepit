@@ -15,6 +15,13 @@ import ai.pleos.playground.navi.constants.NaviErrorCode
 import ai.pleos.playground.navi.data.TripInfo
 import ai.pleos.playground.navi.data.TripRequest
 import ai.pleos.playground.navi.data.WaypointInfo
+import ai.pleos.playground.navi.constants.CautionPointType
+import ai.pleos.playground.navi.constants.NavigationStatus
+import ai.pleos.playground.navi.data.CautionPoint
+import ai.pleos.playground.navi.data.CameraAlert
+import ai.pleos.playground.navi.data.TBTInfo
+import ai.pleos.playground.navi.data.RouteStateInfo
+import ai.pleos.playground.navi.data.DrivingInfo
 import android.os.Handler
 import android.os.Looper
 
@@ -23,6 +30,8 @@ class NaviClient(
     context: Context,
     private val onTravelTime: (Int) -> Unit,
     private val onNaviError: (String) -> Unit,
+    private val onGuidance: (Boolean?, Double?) -> Unit,
+    private val onHazard: (Boolean) -> Unit,
     private val onPlaces: (List<Place>) -> Unit,
 ) : NaviHelperEventListener {
 
@@ -60,11 +69,74 @@ class NaviClient(
         }
     }
 
+    private var guided = false
+    private var nearTurn = false
+    private var nearCamera = false
+    private var nearCaution = false
+    private var nearDownhill = emptySet<String>()
+    private var routeMeters: Int? = null
+
+    override fun onNavigationStatus(status: NavigationStatus) {
+        main.post {
+            guided = status == NavigationStatus.ROUTE_DRIVE
+            if (!guided) {
+                nearDownhill = emptySet()
+                routeMeters = null
+                nearTurn = false
+                nearCamera = false
+                nearCaution = false
+                onHazard(false)
+            }
+        }
+    }
+
+    override fun onDrivingInfo(drivingInfo: DrivingInfo) {
+        main.post { routeMeters = drivingInfo.destination?.distance }
+    }
+
+    override fun onRouteStateInfo(routeStateInfo: RouteStateInfo) {
+        main.post {
+            if (routeStateInfo.isRouting == true) guided = true
+            val distance = routeMeters ?: return@post
+            val congestion = routeStateInfo.trafficStatus?.summary?.totalCongestionDist ?: return@post
+            if (guided && distance > 0) onGuidance(null, congestion / distance)
+        }
+    }
+
+    override fun onCautionPointInfo(cautionPointList: List<CautionPoint>) {
+        main.post {
+            if (!guided) return@post
+            val downhill = cautionPointList.filter { it.type == CautionPointType.DOWNHILL_CAUTION_AREA }
+            val near = downhill.filter { it.remainDistance in 0..30 }.mapNotNull { it.id }.toSet()
+            // An alert that was within 30 m and then left the current guidance list was passed.
+            val present = downhill.mapNotNull { it.id }.toSet()
+            onGuidance((nearDownhill - present).isNotEmpty() || downhill.any { it.remainDistance == 0 }, null)
+            nearDownhill = near
+            nearCaution = cautionPointList.any { it.remainDistance in 0..300 }
+            onHazard(nearTurn || nearCamera || nearCaution)
+        }
+    }
+
+    override fun onTBTInfo(tbtInfoList: List<TBTInfo>) {
+        main.post {
+            nearTurn = guided && tbtInfoList.any { (it.distance ?: -1.0) in 0.0..300.0 }
+            onHazard(nearTurn || nearCamera || nearCaution)
+        }
+    }
+
+    override fun onCameraAlert(cameraAlertList: List<CameraAlert>) {
+        main.post {
+            nearCamera = guided && cameraAlertList.any { it.remainDistance in 0..300 }
+            onHazard(nearTurn || nearCamera || nearCaution)
+        }
+    }
+
     /** 연결에 성공하면 true. 즐겨찾기는 onBookmarkInfo로 나중에 들어온다. */
     fun start(): Boolean = try {
         helper.initialize()
         helper.addListener(this)
         helper.getBookmarkInfo()
+        helper.getRouteStateInfo()
         started = true
         true
     } catch (e: Exception) {
